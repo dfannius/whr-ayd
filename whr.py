@@ -97,7 +97,12 @@ class Player:
 
     # Return (Hessian, gradient)
     def compute_derivatives(self):
-        wsq = 1           # 30 days per cycle
+        # The WHR paper expresses w^2 in units of Elo^2/day. The conversion to r^2/month
+        # means multiplying by (ln(10) / 400)^2 * 30 ~= 0.001
+
+        elo_wsq = 300
+        wsq = elo_wsq * 0.001
+
         num_points = len(self.rating_history)
         H = np.eye(num_points) * -0.001
         g = np.zeros(num_points)
@@ -302,7 +307,9 @@ for i in range(1000):
     avg_change = change / len(player_db)
     # print("avg change", avg_change)
     if avg_change < 0.01:
+        print("{} iterations\n".format(i+1))
         break
+
 
 for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
     stds = p.get_stds()
