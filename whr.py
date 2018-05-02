@@ -95,10 +95,8 @@ class Player:
             else:
                 self.rating_history[i].losses.append(g.winner)
 
-    # Return magnitude of changes
-    def iterate_whr(self):
-        if self.root: return 0.0
-        dprint("\niterate_whr {} {}".format(self.handle, self.rating_history))
+    # Return (Hessian, gradient)
+    def compute_derivatives(self):
         wsq = 1           # 30 days per cycle
         num_points = len(self.rating_history)
         H = np.eye(num_points) * -0.001
@@ -126,7 +124,15 @@ class Player:
                     H[i-1,i-1] -= sigmasq_recip              # Wiener
                 H[i-1,i] += sigmasq_recip                    # Wiener
                 H[i,i-1] += sigmasq_recip                    # Wiener
+        return (H, g)
 
+    # Return magnitude of changes
+    def iterate_whr(self):
+        if self.root: return 0.0
+        dprint("\niterate_whr {} {}".format(self.handle, self.rating_history))
+
+        (H, g) = self.compute_derivatives()
+        num_points = H.shape[0]
         # xn = np.linalg.solve(H, g)
 
         d = np.zeros(num_points)
@@ -164,6 +170,14 @@ class Player:
 
         dprint("new ratings {} {}".format(self.handle, self.rating_history))
         return np.linalg.norm(x)
+
+    # Return list of std deviation at each rating point
+    def get_stds(self):
+        (H, g) = self.compute_derivatives()
+        num_points = H.shape[0]
+        # We're only doing this once, I don't care about speed tricks
+        Hinv = np.linalg.inv(H)
+        return [math.sqrt(-Hinv[i,i]) for i in range(num_points)]
 
 class Game:
     def __init__(self, date, winner, loser):
@@ -291,5 +305,9 @@ for i in range(1000):
         break
 
 for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
+    stds = p.get_stds()
     if len(p.rating_history) > 0:
-        print("{:<10} {:>5}: {}".format(p.handle, rating_to_rank(p.latest_rating()), p.rating_history[1:]))
+        print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
+                                                 rating_to_rank(p.latest_rating()),
+                                                 stds[-1],
+                                                 p.rating_history[1:]))
