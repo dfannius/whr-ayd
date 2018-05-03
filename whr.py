@@ -2,6 +2,7 @@ import argparse
 from bs4 import BeautifulSoup, NavigableString
 import csv
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 
 parser = argparse.ArgumentParser(description='WHR for AYD')
@@ -17,6 +18,8 @@ parser.add_argument("--print-ratings", action="store_true", default=False,
                     help="Print ratings data")
 parser.add_argument("--load-ratings", action="store_true", default=False,
                     help="Load data from ratings file")
+parser.add_argument("--draw-graph", type=str, default=None, metavar="H",
+                    help="Handle of user's graph to draw")
 
 args = parser.parse_args()
 
@@ -28,6 +31,11 @@ def rating_to_rank(raw_r):
         return "{:.2f}d".format(r)
     else:
         return "{:.2f}k".format(2-r)
+
+def date_to_str(d):
+    season = int(d/4) + 8
+    cycle = d - (season-8) * 4
+    return "{}{}".format(season, "ABC"[cycle])
 
 DEBUG = False
 def dprint(*args, **kwargs):
@@ -392,3 +400,25 @@ if args.load_ratings:
 
 if args.print_ratings:
     print_ratings()
+
+if args.draw_graph:
+    handle = args.draw_graph
+    p = player_db[handle]
+    history = p.rating_history[1:]
+    dates = [r.date for r in history]
+    ratings = [r.rating for r in history]
+    plt.style.use("seaborn-darkgrid")
+    plt.title(handle + "\n")
+    plt.fill_between(dates,
+                     [r.rating - r.std for r in history], 
+                     [r.rating + r.std for r in history],
+                     alpha=0.2)
+    plt.plot(dates, ratings)
+    (tick_vals, tick_labels) = plt.yticks()
+    new_tick_labels = [rating_to_rank(r) for r in tick_vals]
+    plt.yticks(tick_vals, new_tick_labels)
+    plt.xticks(dates, [date_to_str(d) for d in dates])
+    plt.savefig("{}.png".format(handle))
+    plt.show()
+
+
