@@ -1,8 +1,28 @@
+import argparse
 from bs4 import BeautifulSoup, NavigableString
+import csv
 import math
 import numpy as np
 
+parser = argparse.ArgumentParser(description='WHR for AYD')
+parser.add_argument("--games-file", type=str, default="games.csv", metavar="F",
+                    help="File of game data")
+parser.add_argument("--ratings-file", type=str, default="ratings.csv", metavar="F",
+                    help="File of ratings data")
+parser.add_argument("--parse-seasons", action="store_true", default=False,
+                    help="Parse HTML season files into game data file")
+parser.add_argument("--analyze-games", action="store_true", default=False,
+                    help="Analyze game data file")
+parser.add_argument("--print-ratings", action="store_true", default=False,
+                    help="Print ratings data")
+parser.add_argument("--load-ratings", action="store_true", default=False,
+                    help="Load data from ratings file")
+
+args = parser.parse_args()
+
 def rating_to_rank(raw_r):
+    # To convert to AGA ratings it seems that we should divide raw_r
+    # by 1.6, but that compresses ranks more than I like.
     r = raw_r - 1
     if r >= 1:
         return "{:.2f}d".format(r)
@@ -18,15 +38,18 @@ def is_cycle_name(tag):
     return tag.name == "b" and tag.contents[0].startswith("AYD")
 
 def r_to_gamma(r):
-    # print(r)
     return math.exp(r)
 
 class RatingDatum:
-    def __init__(self, date, rating):
+    def __init__(self, date, rating, std=0):
         self.date = date
         self.rating = rating
+        self.std = std
         self.wins = []
         self.losses = []
+
+    def set_std(self, std):
+        self.std = std
 
     def __repr__(self):
         return "{}: {}".format(self.date, rating_to_rank(self.rating))
@@ -42,6 +65,17 @@ class Player:
     def __repr__(self):
         return "{} ({})".format(self.name, self.handle)
 
+    def write_rating_history(self, f):
+        print('"{}","{}","{}"'.format(self.name, self.handle, len(self.rating_history)), file=f, end="")
+        for r in self.rating_history:
+            print(',"{}","{}","{}"'.format(r.date, r.rating, r.std), file=f, end="")
+        print(file=f)
+
+    def read_rating_history(self, row):
+        num_points = int(row[0])
+        for i in range(num_points):
+            self.rating_history.append(RatingDatum(int(row[3*i+1]), float(row[3*i+2]), float(row[3*i+3])))
+
     def add_game(self, game):
         self.games.append(game)
 
@@ -52,26 +86,23 @@ class Player:
             return self.rating_history[-1].rating
 
     def get_rating(self, date):
-        # print("get_rating {} @ {}".format(self, date))
         if self.root:
             return 0
         if len(self.rating_history) == 0:
             return 0
-        # Dog-slow implementation for now
+        # Dog-slow implementation for now. In fact, everyone has a rating history point
+        # for every game that they have played, so we will only ever hit the first arm
+        # of this.
         for (i, r) in enumerate(self.rating_history):
             if r.date == date:
-                # print(" found exactly {}".format(r.rating))
                 return r.rating
             elif r.date > date:
                 if i == 0:
-                    # print(" off beginning of list".format(r.rating))
                     return r.rating
                 else:
                     prev_r = self.rating_history[i-1]
                     rating = prev_r.rating + (r.rating - prev_r.rating) * (date - prev_r.date) / (r.date - prev_r.date)
-                    # print(" interpolated {}".format(rating))
                     return rating
-        # print(" off end of list".format(self.rating_history[-1].rating))
         return self.rating_history[-1].rating
 
     def init_rating_history(self):
@@ -99,7 +130,6 @@ class Player:
     def compute_derivatives(self):
         # The WHR paper expresses w^2 in units of Elo^2/day. The conversion to r^2/month
         # means multiplying by (ln(10) / 400)^2 * 30 ~= 0.001
-
         elo_wsq = 300
         wsq = elo_wsq * 0.001
 
@@ -138,7 +168,7 @@ class Player:
 
         (H, g) = self.compute_derivatives()
         num_points = H.shape[0]
-        # xn = np.linalg.solve(H, g)
+        # xn = np.linalg.solve(H, g)       # for double-checking
 
         d = np.zeros(num_points)
         b = np.zeros(num_points)
@@ -177,12 +207,14 @@ class Player:
         return np.linalg.norm(x)
 
     # Return list of std deviation at each rating point
-    def get_stds(self):
+    def compute_stds(self):
         (H, g) = self.compute_derivatives()
         num_points = H.shape[0]
         # We're only doing this once, I don't care about speed tricks
         Hinv = np.linalg.inv(H)
-        return [math.sqrt(-Hinv[i,i]) for i in range(num_points)]
+        for (i,r) in enumerate(self.rating_history):
+            r.set_std(math.sqrt(-Hinv[i,i]))
+
 
 class Game:
     def __init__(self, date, winner, loser):
@@ -213,7 +245,7 @@ root_player = get_player("[root]", "[root]", is_root=True)
 def cycle_to_date(s):
     return s.split(", ")[-1]
 
-def analyze_seasons(out_fname):
+def parse_seasons(out_fname):
     # There are three cycles (e.g., "January 2014", "February 2014", "March 2014") in a season (e.g., 8)
     total_num_cycles = 0            # number of cycles in all previous seasons combined
 
@@ -268,7 +300,10 @@ def analyze_seasons(out_fname):
                                 loser = crosstable_players[row_player_idx]
                             else: # empty or forfeit
                                 continue
-                            games.append(Game(global_cycle, winner, loser))
+                            game = Game(global_cycle, winner, loser)
+                            games.append(game)
+                            winner.add_game(game)
+                            loser.add_game(game)
                     row_player_idx += 1
 
         # Add an extra month between seasons
@@ -283,17 +318,24 @@ def analyze_seasons(out_fname):
                                                     g.loser.handle),
                   file=out_file)
 
-analyze_seasons("games.out")
+# As produced by analyze_seasons()
+def read_games_file(fname):
+    player_db.clear()
+    games.clear()
+    with open(fname) as csvfile:
+        reader = csv.reader(csvfile)
+        for row in reader:
+            (date, winner_name, winner_handle, loser_name, loser_handle) = row
+            date = int(date)
+            winner = get_player(winner_name, winner_handle)
+            loser = get_player(loser_name, loser_handle)
+            game = Game(date, winner, loser)
+            winner.add_game(game)
+            loser.add_game(game)
 
-# From this point on we assume that player_db and games are
-# populated. In the future we might read that data in from a file.
-
-for g in games:
-    g.winner.add_game(g)
-    g.loser.add_game(g)
-
-for p in player_db.values():
-    p.init_rating_history()
+def init_whr():
+    for p in player_db.values():
+        p.init_rating_history()
 
 def iterate_whr():
     sum_xsq = 0
@@ -301,20 +343,52 @@ def iterate_whr():
         sum_xsq += p.iterate_whr() * 2
     return math.sqrt(sum_xsq)
 
-for i in range(1000):
-    # print("ITERATION {}".format(i))
-    change = iterate_whr()
-    avg_change = change / len(player_db)
-    # print("avg change", avg_change)
-    if avg_change < 0.01:
-        print("{} iterations\n".format(i+1))
-        break
+def run_whr():
+    init_whr()
+    for i in range(1000):
+        # print("ITERATION {}".format(i))
+        change = iterate_whr()
+        avg_change = change / len(player_db) # maybe should be avg change per rating point?
+        # print("avg change", avg_change)
+        if avg_change < 0.01:
+            print("{} iterations".format(i+1))
+            break
+    for p in player_db.values():
+        p.compute_stds()
 
+def print_ratings():
+    for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
+        if len(p.rating_history) > 0:
+            print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
+                                                     rating_to_rank(p.latest_rating()),
+                                                     p.rating_history[-1].std,
+                                                     p.rating_history[1:]))
 
-for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
-    stds = p.get_stds()
-    if len(p.rating_history) > 0:
-        print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
-                                                 rating_to_rank(p.latest_rating()),
-                                                 stds[-1],
-                                                 p.rating_history[1:]))
+def save_rating_history(fname):
+    with open(fname, "w") as f:
+        for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
+              p.write_rating_history(f)
+
+def load_rating_history(fname):
+    with open(fname) as csvfile:
+        reader = csv.reader(csvfile)
+        for row in reader:
+            (name, handle) = row[:2]
+            p = get_player(name, handle)
+            # print(p)
+            p.read_rating_history(row[2:])
+
+if args.parse_seasons:
+    parse_seasons(args.games_file)
+else:
+    read_games_file(args.games_file)
+
+if args.analyze_games:
+    run_whr()
+    save_rating_history(args.ratings_file)
+
+if args.load_ratings:
+    load_rating_history(args.ratings_file)
+
+if args.print_ratings:
+    print_ratings()
