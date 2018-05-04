@@ -50,8 +50,9 @@ def r_to_gamma(r):
     return math.exp(r)
 
 class RatingDatum:
-    def __init__(self, date, rating, std=0):
+    def __init__(self, date, ayd_rating, rating, std=0):
         self.date = date
+        self.ayd_rating = ayd_rating
         self.rating = rating
         self.std = std
         self.wins = []
@@ -68,22 +69,29 @@ class Player:
         self.name = name
         self.handle = handle
         self.games = []
+        self.ayd_ratings = {}
         self.rating_history = []
         self.root = is_root
 
     def __repr__(self):
         return "{} ({})".format(self.name, self.handle)
 
+    def set_ayd_rating(self, date, ayd_rating):
+        self.ayd_ratings[date] = ayd_rating
+
+    def get_ayd_rating(self, date):
+        return self.ayd_ratings.get(date, 0)
+
     def write_rating_history(self, f):
-        print('"{}","{}","{}"'.format(self.name, self.handle, len(self.rating_history)), file=f, end="")
+        print('"{}","{}",{}'.format(self.name, self.handle, len(self.rating_history)), file=f, end="")
         for r in self.rating_history:
-            print(',"{}","{}","{}"'.format(r.date, r.rating, r.std), file=f, end="")
+            print(',{},{},{},{}'.format(r.date, r.ayd_rating, r.rating, r.std), file=f, end="")
         print(file=f)
 
     def read_rating_history(self, row):
         num_points = int(row[0])
         for i in range(num_points):
-            self.rating_history.append(RatingDatum(int(row[3*i+1]), float(row[3*i+2]), float(row[3*i+3])))
+            self.rating_history.append(RatingDatum(int(row[4*i+1]), int(row[4*i+2]), float(row[4*i+3]), float(row[4*i+4])))
 
     def add_game(self, game):
         self.games.append(game)
@@ -118,13 +126,13 @@ class Player:
         if self.root: return
         min_date = min((g.date for g in self.games), default=0)
         root_date = min_date - 100
-        self.add_game(Game(root_date, self, root_player))
-        self.add_game(Game(root_date, root_player, self))
+        self.add_game(Game(root_date, self, 0, root_player, 0))
+        self.add_game(Game(root_date, root_player, 0, self, 0))
         dates = list(set(g.date for g in self.games))
         dates.sort()
         self.games.sort(key=lambda g: g.date)
 
-        self.rating_history = [RatingDatum(d, 0) for d in dates]
+        self.rating_history = [RatingDatum(d, self.get_ayd_rating(d), 0) for d in dates]
         i = 0
         for g in self.games:
             if self.rating_history[i].date != g.date:
@@ -226,10 +234,12 @@ class Player:
 
 
 class Game:
-    def __init__(self, date, winner, loser):
+    def __init__(self, date, winner, winner_ayd_rating, loser, loser_ayd_rating):
         self.date = date
         self.winner = winner
+        self.winner_ayd_rating = winner_ayd_rating
         self.loser = loser
+        self.loser_ayd_rating = loser_ayd_rating
 
     def __repr__(self):
         return "{:02}: {} > {}".format(self.date, self.winner, self.loser)
@@ -281,7 +291,7 @@ def parse_seasons(out_fname):
             while type(crosstable_name) is NavigableString or crosstable_name.name != "h3":
                 crosstable_name = crosstable_name.previous_sibling
             crosstable_date = cycle_to_date(crosstable_name.contents[0])
-            global_cycle = total_num_cycles + season_cycles.index(crosstable_date)
+            date = total_num_cycles + season_cycles.index(crosstable_date)
 
             # Construct the list of players, in order
             crosstable_players = []
@@ -291,7 +301,10 @@ def parse_seasons(out_fname):
                 if len(tds) > 0:
                     name = tds[1].nobr.a.contents[0]
                     handle = tds[2].contents[0]
-                    crosstable_players.append(get_player(name,handle))
+                    ayd_rating = int(tds[11].contents[0])
+                    player = get_player(name,handle)
+                    player.set_ayd_rating(date, ayd_rating)
+                    crosstable_players.append(player)
 
             # Parse game results
             row_player_idx = 0
@@ -309,7 +322,7 @@ def parse_seasons(out_fname):
                                 loser = crosstable_players[row_player_idx]
                             else: # empty or forfeit
                                 continue
-                            game = Game(global_cycle, winner, loser)
+                            game = Game(date, winner, winner.get_ayd_rating(date), loser, loser.get_ayd_rating(date))
                             games.append(game)
                             winner.add_game(game)
                             loser.add_game(game)
@@ -320,11 +333,13 @@ def parse_seasons(out_fname):
 
     with open(out_fname, "w") as out_file:
         for g in games:
-            print('"{}","{}","{}","{}","{}"'.format(g.date,
-                                                    g.winner.name,
-                                                    g.winner.handle,
-                                                    g.loser.name,
-                                                    g.loser.handle),
+            print('{},"{}","{}",{},"{}","{}",{}'.format(g.date,
+                                                        g.winner.name,
+                                                        g.winner.handle,
+                                                        g.winner_ayd_rating,
+                                                        g.loser.name,
+                                                        g.loser.handle,
+                                                        g.loser_ayd_rating),
                   file=out_file)
 
 # As produced by analyze_seasons()
@@ -334,13 +349,17 @@ def read_games_file(fname):
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            (date, winner_name, winner_handle, loser_name, loser_handle) = row
+            (date, winner_name, winner_handle, winner_ayd_rating, loser_name, loser_handle, loser_ayd_rating) = row
             date = int(date)
+            winner_ayd_rating = int(winner_ayd_rating)
+            loser_ayd_rating = int(loser_ayd_rating)
             winner = get_player(winner_name, winner_handle)
             loser = get_player(loser_name, loser_handle)
-            game = Game(date, winner, loser)
+            game = Game(date, winner, winner_ayd_rating, loser, loser_ayd_rating)
             winner.add_game(game)
             loser.add_game(game)
+            winner.set_ayd_rating(date, winner_ayd_rating)
+            loser.set_ayd_rating(date, loser_ayd_rating)
 
 def init_whr():
     for p in player_db.values():
