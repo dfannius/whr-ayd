@@ -4,6 +4,7 @@ import csv
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
 parser = argparse.ArgumentParser(description='WHR for AYD')
 parser.add_argument("--games-file", type=str, default="games.csv", metavar="F",
@@ -402,6 +403,10 @@ if args.print_ratings:
     print_ratings()
 
 if args.draw_graph:
+    plot_dir = "plots"
+    if not os.path.exists(plot_dir):
+        os.mkdir(plot_dir)
+
     handle = args.draw_graph
     p = player_db[handle]
     history = p.rating_history[1:]
@@ -418,7 +423,7 @@ if args.draw_graph:
     new_tick_labels = [rating_to_rank(r) for r in tick_vals]
     plt.yticks(tick_vals, new_tick_labels)
     plt.xticks(dates, [date_to_str(d) for d in dates])
-    plt.savefig("{}.png".format(handle))
+    plt.savefig("{}/{}.png".format(plot_dir, handle))
     plt.show()
 
 
