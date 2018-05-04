@@ -11,16 +11,20 @@ parser.add_argument("--games-file", type=str, default="games.csv", metavar="F",
                     help="File of game data")
 parser.add_argument("--ratings-file", type=str, default="ratings.csv", metavar="F",
                     help="File of ratings data")
+parser.add_argument("--report-file", type=str, default="report.txt", metavar="F",
+                    help="File with ratings report")
 parser.add_argument("--parse-seasons", action="store_true", default=False,
                     help="Parse HTML season files into game data file")
 parser.add_argument("--analyze-games", action="store_true", default=False,
                     help="Analyze game data file")
-parser.add_argument("--print-ratings", action="store_true", default=False,
-                    help="Print ratings data")
+parser.add_argument("--print-report", action="store_true", default=False,
+                    help="Produce ratings report")
 parser.add_argument("--load-ratings", action="store_true", default=False,
                     help="Load data from ratings file")
 parser.add_argument("--draw-graph", type=str, default=None, metavar="H",
                     help="Handle of user's graph to draw")
+parser.add_argument("--whr-vs-ayd", action="store_true", default=False,
+                    help="Draw scatterplot of WHR vs AYD ratings")
 
 args = parser.parse_args()
 
@@ -33,9 +37,13 @@ def rating_to_rank(raw_r):
     else:
         return "{:.2f}k".format(2-r)
 
-def date_to_str(d):
+def date_to_season_cycle(d):
     season = int(d/4) + 8
     cycle = d - (season-8) * 4
+    return (season, cycle)
+
+def date_to_str(d):
+    season, cycle = date_to_season_cycle(d)
     return "{}{}".format(season, "ABC"[cycle])
 
 DEBUG = False
@@ -101,6 +109,12 @@ class Player:
             return 0
         else:
             return self.rating_history[-1].rating
+
+    def latest_ayd_rating(self):
+        if len(self.rating_history) == 0:
+            return 0
+        else:
+            return self.rating_history[-1].ayd_rating
 
     def get_rating(self, date):
         if self.root:
@@ -384,13 +398,15 @@ def run_whr():
     for p in player_db.values():
         p.compute_stds()
 
-def print_ratings():
-    for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
-        if len(p.rating_history) > 0:
-            print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
-                                                     rating_to_rank(p.latest_rating()),
-                                                     p.rating_history[-1].std,
-                                                     p.rating_history[1:]))
+def print_report(fname):
+    with open(fname, "w") as f:
+        for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
+            if len(p.rating_history) > 0:
+                print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
+                                                         rating_to_rank(p.latest_rating()),
+                                                         p.rating_history[-1].std,
+                                                         p.rating_history[1:]),
+                      file=f)
 
 def save_rating_history(fname):
     with open(fname, "w") as f:
@@ -415,11 +431,35 @@ if args.analyze_games:
     run_whr()
     save_rating_history(args.ratings_file)
 
-if args.load_ratings:
+need_ratings = args.print_report or args.draw_graph or args.whr_vs_ayd
+
+if args.load_ratings or (need_ratings and not args.analyze_games):
     load_rating_history(args.ratings_file)
 
-if args.print_ratings:
-    print_ratings()
+if args.print_report:
+    print_report(args.report_file)
+
+plt.style.use("seaborn-darkgrid")
+
+def date_str_ticks(dates):
+    # Put a label just on the middle cycle of each season, unless the player didn't play that one.
+    tick_labels = ["" for d in dates]
+    seasons_seen = set()
+    seasons_cycles = [date_to_season_cycle(d) for d in dates]
+    # First label middle cycles
+    for (i,d) in enumerate(dates):
+        (season, cycle) = seasons_cycles[i]
+        if cycle == 1:
+            tick_labels[i] = str(season)
+            seasons_seen.add(season)
+    # Make sure we label seasons whose middle cycles are missing
+    for (i,d) in enumerate(dates):
+        (season, cycle) = seasons_cycles[i]
+        if not season in seasons_seen:
+            tick_labels[i] = str(season)
+            seasons_seen.add(season)
+
+    return tick_labels
 
 if args.draw_graph:
     plot_dir = "plots"
@@ -431,8 +471,7 @@ if args.draw_graph:
     history = p.rating_history[1:]
     dates = [r.date for r in history]
     ratings = [r.rating for r in history]
-    plt.style.use("seaborn-darkgrid")
-    plt.title(handle + "\n")
+    plt.title("\n" + handle + "\n")
     plt.fill_between(dates,
                      [r.rating - r.std for r in history], 
                      [r.rating + r.std for r in history],
@@ -441,8 +480,41 @@ if args.draw_graph:
     (tick_vals, tick_labels) = plt.yticks()
     new_tick_labels = [rating_to_rank(r) for r in tick_vals]
     plt.yticks(tick_vals, new_tick_labels)
-    plt.xticks(dates, [date_to_str(d) for d in dates])
+    # plt.xticks(dates, [date_to_str(d) for d in dates])
+    plt.xticks(dates, date_str_ticks(dates))
+    plt.xlabel("Season")
+    plt.ylabel("Rank")
     plt.savefig("{}/{}.png".format(plot_dir, handle))
     plt.show()
 
+if args.whr_vs_ayd:
+    players = [p for p in player_db.values() if len(p.rating_history) > 1]
+    whr_ratings = [p.latest_rating() for p in players]
+    ayd_ratings = [p.latest_ayd_rating() for p in players]
 
+    W = np.vstack([whr_ratings, np.ones(len(whr_ratings))]).T
+    (lsq, resid, rank, sing) = np.linalg.lstsq(W, ayd_ratings)
+
+    plt.scatter(whr_ratings, ayd_ratings)
+    (tick_vals, tick_labels) = plt.xticks()
+    new_tick_labels = [rating_to_rank(r) for r in tick_vals]
+    plt.xticks(tick_vals, new_tick_labels)
+
+    callout = None              # player to highlight
+    if callout: plt.scatter([callout.latest_rating()], [callout.latest_ayd_rating()])
+
+    plt.plot(whr_ratings, [lsq[0] * r + lsq[1] for r in whr_ratings])
+    # Maybe we should divide by std
+    deltas = [(ayd_ratings[i] - (lsq[0] * whr_ratings[i] + lsq[1])) for i in range(len(players))]
+    abs_deltas = [abs(d) for d in deltas]
+    delta_cutoff = sorted(abs_deltas, reverse=True)[9]
+    for (i, p) in enumerate(players):
+        if abs_deltas[i] >= delta_cutoff or p == callout:
+            plt.annotate(p.handle,
+                         (whr_ratings[i], ayd_ratings[i]),
+                         xytext=(5,2),
+                         textcoords="offset points")
+
+    plt.xlabel("WHR rating")
+    plt.ylabel("AYD rating")
+    plt.show()
