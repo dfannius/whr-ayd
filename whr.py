@@ -282,20 +282,36 @@ class Game:
     def __repr__(self):
         return "{:02}: {} > {}".format(self.date, self.winner, self.loser)
 
-player_db = {}                  # indexed by handle
+class PlayerDB:
+    def __init__(self):
+        self.player_map = {}
+
+    def get_player(self, name, handle, is_root=False):
+        if handle in self.player_map:
+            player = self.player_map[handle]
+            assert(player.name == name)
+            return player
+        else:
+            player = Player(name, handle, is_root)
+            self.player_map[handle] = player
+            return player
+
+    def __getitem__(self, handle):
+        return self.player_map[handle]
+
+    def __len__(self):
+        return len(self.player_map)
+
+    def clear(self):
+        self.player_map.clear()
+
+    def values(self):
+        return self.player_map.values()
+
+player_db = PlayerDB()
 games = []
 
-def get_player(name, handle, is_root=False):
-    if handle in player_db:
-        player = player_db[handle]
-        assert(player.name == name)
-        return player
-    else:
-        player = Player(name, handle, is_root)
-        player_db[handle] = player
-        return player
-
-root_player = get_player("[root]", "[root]", is_root=True)
+root_player = player_db.get_player("[root]", "[root]", is_root=True)
 
 # A full cycle name is something like "AYD League B, March 2014".
 # Get just the date part
@@ -340,7 +356,7 @@ def parse_seasons(out_fname):
                     name = tds[1].nobr.a.contents[0]
                     handle = tds[2].contents[0]
                     ayd_rating = int(tds[11].contents[0])
-                    player = get_player(name,handle)
+                    player = player_db.get_player(name,handle)
                     player.set_ayd_rating(date, ayd_rating)
                     crosstable_players.append(player)
 
@@ -391,8 +407,8 @@ def read_games_file(fname):
             date = int(date)
             winner_ayd_rating = int(winner_ayd_rating)
             loser_ayd_rating = int(loser_ayd_rating)
-            winner = get_player(winner_name, winner_handle)
-            loser = get_player(loser_name, loser_handle)
+            winner = player_db.get_player(winner_name, winner_handle)
+            loser = player_db.get_player(loser_name, loser_handle)
             game = Game(date, winner, winner_ayd_rating, loser, loser_ayd_rating)
             winner.add_game(game)
             loser.add_game(game)
@@ -442,7 +458,7 @@ def load_rating_history(fname):
         reader = csv.reader(csvfile)
         for row in reader:
             (name, handle) = row[:2]
-            p = get_player(name, handle)
+            p = get_player(player_db, name, handle)
             p.read_rating_history(row[2:])
 
 if args.parse_seasons:
