@@ -164,6 +164,7 @@ class Player:
         if self.root: return
         min_date = min((g.date for g in self.games), default=0)
         root_date = min_date - 100
+        root_player = player_db.get_root_player()
         self.add_game(Game(root_date, self, 0, root_player, 0))
         self.add_game(Game(root_date, root_player, 0, self, 0))
         dates = list(set(g.date for g in self.games))
@@ -285,6 +286,7 @@ class Game:
 class PlayerDB:
     def __init__(self):
         self.player_map = {}
+        self.root_player = self.get_player("[root]", "[root]", is_root=True)
 
     def get_player(self, name, handle, is_root=False):
         if handle in self.player_map:
@@ -295,6 +297,9 @@ class PlayerDB:
             player = Player(name, handle, is_root)
             self.player_map[handle] = player
             return player
+
+    def get_root_player(self):
+        return self.root_player
 
     def __getitem__(self, handle):
         return self.player_map[handle]
@@ -310,8 +315,6 @@ class PlayerDB:
 
 player_db = PlayerDB()
 games = []
-
-root_player = player_db.get_player("[root]", "[root]", is_root=True)
 
 # A full cycle name is something like "AYD League B, March 2014".
 # Get just the date part
@@ -356,7 +359,7 @@ def parse_seasons(out_fname):
                     name = tds[1].nobr.a.contents[0]
                     handle = tds[2].contents[0]
                     ayd_rating = int(tds[11].contents[0])
-                    player = player_db.get_player(name,handle)
+                    player = player_db.get_player(name, handle)
                     player.set_ayd_rating(date, ayd_rating)
                     crosstable_players.append(player)
 
@@ -458,7 +461,7 @@ def load_rating_history(fname):
         reader = csv.reader(csvfile)
         for row in reader:
             (name, handle) = row[:2]
-            p = get_player(player_db, name, handle)
+            p = player_db.get_player(name, handle)
             p.read_rating_history(row[2:])
 
 if args.parse_seasons:
