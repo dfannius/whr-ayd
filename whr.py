@@ -1,3 +1,9 @@
+# To perform incremental updates:
+# - Make playerdb a parameter instead of global?
+# - Load ratings with ratings-file
+# - Parse seasons
+# - init playerdb ratings from old playerdb
+
 import argparse
 from bs4 import BeautifulSoup, NavigableString
 import csv
@@ -98,8 +104,26 @@ class Player:
 
     def read_rating_history(self, row):
         num_points = int(row[0])
+        appending = False
+        rating_idx = 0
         for i in range(num_points):
-            self.rating_history.append(RatingDatum(int(row[4*i+1]), int(row[4*i+2]), float(row[4*i+3]), float(row[4*i+4])))
+            (date, ayd_rating, rating, std) = (int(row[4*i+1]),
+                                               int(row[4*i+2]),
+                                               float(row[4*i+3]),
+                                               float(row[4*i+4]))
+            if not appending:
+                while rating_idx < len(self.rating_history) and self.rating_history[rating_idx].date != date:
+                    rating_idx += 1
+                if rating_idx >= len(self.rating_history):
+                    appending = True
+                else:
+                    r = self.rating_history[rating_idx]
+                    r.ayd_rating = ayd_rating
+                    r.rating = rating
+                    r.std = std
+
+            if appending:
+                self.rating_history.append(RatingDatum(date, ayd_rating, rating, std))
 
     def add_game(self, game):
         self.games.append(game)
@@ -392,7 +416,7 @@ def run_whr():
         change = iterate_whr()
         avg_change = change / len(player_db) # maybe should be avg change per rating point?
         # print("avg change", avg_change)
-        if avg_change < 0.01:
+        if avg_change < 0.005:
             print("{} iterations".format(i+1))
             break
     for p in player_db.values():
@@ -419,7 +443,6 @@ def load_rating_history(fname):
         for row in reader:
             (name, handle) = row[:2]
             p = get_player(name, handle)
-            # print(p)
             p.read_rating_history(row[2:])
 
 if args.parse_seasons:
@@ -427,14 +450,13 @@ if args.parse_seasons:
 else:
     read_games_file(args.games_file)
 
+need_ratings = args.print_report or args.draw_graph or args.whr_vs_ayd
+if args.load_ratings or (need_ratings and not args.analyze_games):
+    load_rating_history(args.ratings_file)
+
 if args.analyze_games:
     run_whr()
     save_rating_history(args.ratings_file)
-
-need_ratings = args.print_report or args.draw_graph or args.whr_vs_ayd
-
-if args.load_ratings or (need_ratings and not args.analyze_games):
-    load_rating_history(args.ratings_file)
 
 if args.print_report:
     print_report(args.report_file)
