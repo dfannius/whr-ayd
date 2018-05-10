@@ -79,12 +79,13 @@ class RatingDatum:
         return "{}: {}".format(self.date, rating_to_rank(self.rating))
 
 class Player:
-    def __init__(self, name, handle, is_root=False):
+    def __init__(self, name, handle, player_db, is_root=False):
         self.name = name
         self.handle = handle
         self.games = []
         self.ayd_ratings = {}
         self.rating_history = []
+        self.player_db = player_db
         self.root = is_root
 
     def __repr__(self):
@@ -164,7 +165,7 @@ class Player:
         if self.root: return
         min_date = min((g.date for g in self.games), default=0)
         root_date = min_date - 100
-        root_player = player_db.get_root_player()
+        root_player = self.player_db.get_root_player()
         self.add_game(Game(root_date, self, 0, root_player, 0))
         self.add_game(Game(root_date, root_player, 0, self, 0))
         dates = list(set(g.date for g in self.games))
@@ -294,7 +295,7 @@ class PlayerDB:
             assert(player.name == name)
             return player
         else:
-            player = Player(name, handle, is_root)
+            player = Player(name, handle, self, is_root)
             self.player_map[handle] = player
             return player
 
@@ -313,7 +314,7 @@ class PlayerDB:
     def values(self):
         return self.player_map.values()
 
-player_db = PlayerDB()
+the_player_db = PlayerDB()
 games = []
 
 # A full cycle name is something like "AYD League B, March 2014".
@@ -321,7 +322,7 @@ games = []
 def cycle_to_date(s):
     return s.split(", ")[-1]
 
-def parse_seasons(out_fname):
+def parse_seasons(player_db, out_fname):
     # There are three cycles (e.g., "January 2014", "February 2014", "March 2014") in a season (e.g., 8)
     total_num_cycles = 0            # number of cycles in all previous seasons combined
 
@@ -400,7 +401,7 @@ def parse_seasons(out_fname):
                   file=out_file)
 
 # As produced by analyze_seasons()
-def read_games_file(fname):
+def read_games_file(player_db, fname):
     player_db.clear()
     games.clear()
     with open(fname) as csvfile:
@@ -418,21 +419,21 @@ def read_games_file(fname):
             winner.set_ayd_rating(date, winner_ayd_rating)
             loser.set_ayd_rating(date, loser_ayd_rating)
 
-def init_whr():
+def init_whr(player_db):
     for p in player_db.values():
         p.init_rating_history()
 
-def iterate_whr():
+def iterate_whr(player_db):
     sum_xsq = 0
     for p in player_db.values():
         sum_xsq += p.iterate_whr() * 2
     return math.sqrt(sum_xsq)
 
-def run_whr():
-    init_whr()
+def run_whr(player_db):
+    init_whr(player_db)
     for i in range(1000):
         # print("ITERATION {}".format(i))
-        change = iterate_whr()
+        change = iterate_whr(player_db)
         avg_change = change / len(player_db) # maybe should be avg change per rating point?
         # print("avg change", avg_change)
         if avg_change < 0.005:
@@ -441,7 +442,7 @@ def run_whr():
     for p in player_db.values():
         p.compute_stds()
 
-def print_report(fname):
+def print_report(player_db, fname):
     with open(fname, "w") as f:
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
             if len(p.rating_history) > 0:
@@ -451,12 +452,12 @@ def print_report(fname):
                                                          p.rating_history[1:]),
                       file=f)
 
-def save_rating_history(fname):
+def save_rating_history(player_db, fname):
     with open(fname, "w") as f:
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
               p.write_rating_history(f)
 
-def load_rating_history(fname):
+def load_rating_history(player_db, fname):
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
@@ -465,20 +466,20 @@ def load_rating_history(fname):
             p.read_rating_history(row[2:])
 
 if args.parse_seasons:
-    parse_seasons(args.games_file)
+    parse_seasons(the_player_db, args.games_file)
 else:
-    read_games_file(args.games_file)
+    read_games_file(the_player_db, args.games_file)
 
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_ayd
 if args.load_ratings or (need_ratings and not args.analyze_games):
-    load_rating_history(args.ratings_file)
+    load_rating_history(the_player_db, args.ratings_file)
 
 if args.analyze_games:
-    run_whr()
-    save_rating_history(args.ratings_file)
+    run_whr(the_player_db)
+    save_rating_history(the_player_db, args.ratings_file)
 
 if args.print_report:
-    print_report(args.report_file)
+    print_report(the_player_db, args.report_file)
 
 plt.style.use("seaborn-darkgrid")
 
@@ -508,7 +509,7 @@ if args.draw_graph:
         os.mkdir(plot_dir)
 
     handle = args.draw_graph
-    p = player_db[handle]
+    p = the_player_db[handle]
     history = p.rating_history[1:]
     dates = [r.date for r in history]
     ratings = [r.rating for r in history]
