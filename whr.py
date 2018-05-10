@@ -1,5 +1,4 @@
 # To perform incremental updates:
-# - Make playerdb a parameter instead of global?
 # - Load ratings with ratings-file
 # - Parse seasons
 # - init playerdb ratings from old playerdb
@@ -315,7 +314,6 @@ class PlayerDB:
         return self.player_map.values()
 
 the_player_db = PlayerDB()
-games = []
 
 # A full cycle name is something like "AYD League B, March 2014".
 # Get just the date part
@@ -325,6 +323,7 @@ def cycle_to_date(s):
 def parse_seasons(player_db, out_fname):
     # There are three cycles (e.g., "January 2014", "February 2014", "March 2014") in a season (e.g., 8)
     total_num_cycles = 0            # number of cycles in all previous seasons combined
+    games = []
 
     seasons = range(8, 22)
     for season in seasons:
@@ -403,7 +402,6 @@ def parse_seasons(player_db, out_fname):
 # As produced by analyze_seasons()
 def read_games_file(player_db, fname):
     player_db.clear()
-    games.clear()
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
