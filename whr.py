@@ -112,7 +112,8 @@ class Player:
                                                float(row[4*i+3]),
                                                float(row[4*i+4]))
             if not appending:
-                while rating_idx < len(self.rating_history) and self.rating_history[rating_idx].date != date:
+                while (rating_idx < len(self.rating_history) and
+                       self.rating_history[rating_idx].date != date):
                     rating_idx += 1
                 if rating_idx >= len(self.rating_history):
                     appending = True
@@ -156,7 +157,8 @@ class Player:
                     return r.rating
                 else:
                     prev_r = self.rating_history[i-1]
-                    rating = prev_r.rating + (r.rating - prev_r.rating) * (date - prev_r.date) / (r.date - prev_r.date)
+                    frac = (date - prev_r.date) / (r.date - prev_r.date)
+                    rating = prev_r.rating + (r.rating - prev_r.rating) * frac
                     return rating
         return self.rating_history[-1].rating
 
@@ -379,7 +381,8 @@ def parse_seasons(player_db, out_fname):
                                 loser = crosstable_players[row_player_idx]
                             else: # empty or forfeit
                                 continue
-                            game = Game(date, winner, winner.get_ayd_rating(date), loser, loser.get_ayd_rating(date))
+                            game = Game(date, winner, winner.get_ayd_rating(date),
+                                        loser, loser.get_ayd_rating(date))
                             games.append(game)
                             winner.add_game(game)
                             loser.add_game(game)
@@ -405,7 +408,8 @@ def read_games_file(player_db, fname):
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            (date, winner_name, winner_handle, winner_ayd_rating, loser_name, loser_handle, loser_ayd_rating) = row
+            (date, winner_name, winner_handle, winner_ayd_rating,
+             loser_name, loser_handle, loser_ayd_rating) = row
             date = int(date)
             winner_ayd_rating = int(winner_ayd_rating)
             loser_ayd_rating = int(loser_ayd_rating)
