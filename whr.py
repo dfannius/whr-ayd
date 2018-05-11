@@ -1,8 +1,3 @@
-# To perform incremental updates:
-# - Load ratings with ratings-file
-# - Parse seasons
-# - init playerdb ratings from old playerdb
-
 import argparse
 from bs4 import BeautifulSoup, NavigableString
 import csv
@@ -67,6 +62,7 @@ class RatingDatum:
         self.date = date
         self.ayd_rating = ayd_rating
         self.rating = rating
+        self.gamma = r_to_gamma(self.rating)
         self.std = std
         self.wins = []
         self.losses = []
@@ -86,6 +82,7 @@ class Player:
         self.rating_history = []
         self.player_db = player_db
         self.root = is_root
+        self.rating_hash = {}
 
     def __repr__(self):
         return "{} ({})".format(self.name, self.handle)
@@ -121,6 +118,7 @@ class Player:
                     r = self.rating_history[rating_idx]
                     r.ayd_rating = ayd_rating
                     r.rating = rating
+                    r.gamma = r_to_gamma(rating)
                     r.std = std
 
             if appending:
@@ -140,6 +138,18 @@ class Player:
             return 0
         else:
             return self.rating_history[-1].ayd_rating
+
+    def get_rating_fast(self, date):
+        if self.root:
+            return 0
+        else:
+            return self.rating_hash[date].rating
+
+    def get_gamma_fast(self, date):
+        if self.root:
+            return 1
+        else:
+            return self.rating_hash[date].gamma
 
     def get_rating(self, date):
         if self.root:
@@ -174,6 +184,8 @@ class Player:
         self.games.sort(key=lambda g: g.date)
 
         self.rating_history = [RatingDatum(d, self.get_ayd_rating(d), 0) for d in dates]
+        for r in self.rating_history:
+            self.rating_hash[r.date] = r
         i = 0
         for g in self.games:
             if self.rating_history[i].date != g.date:
@@ -195,12 +207,12 @@ class Player:
         H = np.eye(num_points) * -0.001
         g = np.zeros(num_points)
         for (i,r) in enumerate(self.rating_history):
-            my_gamma = r_to_gamma(r.rating)
+            my_gamma = r.gamma
             # dprint("my gamma {} -> {}".format(r.rating, my_gamma))
             g[i] += len(r.wins)                              # Bradley-Terry
-            for w in r.wins + r.losses:
-                # dprint("{} @ {} gamma {} -> ".format(w, r.date, w.get_rating(r.date)), end="")
-                their_gamma = r_to_gamma(w.get_rating(r.date))
+            for j in r.wins + r.losses:
+                # dprint("{} @ {} gamma {} -> ".format(j, r.date, j.get_gamma_fast(r.date)), end="")
+                their_gamma = j.get_gamma_fast(r.date)
                 # dprint("{}".format(their_gamma))
                 factor = 1. / (my_gamma + their_gamma)
                 g[i] -= my_gamma * factor                    # Bradley-Terry
@@ -251,6 +263,7 @@ class Player:
 
         for (i,r) in enumerate(self.rating_history):
             r.rating -= x[i]
+            r.gamma = r_to_gamma(r.rating)
 
         # dprint("g", g)
         # dprint("H", H)
