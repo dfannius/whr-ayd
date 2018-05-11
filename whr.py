@@ -196,12 +196,12 @@ class Player:
         g = np.zeros(num_points)
         for (i,r) in enumerate(self.rating_history):
             my_gamma = r_to_gamma(r.rating)
-            dprint("my gamma {} -> {}".format(r.rating, my_gamma))
+            # dprint("my gamma {} -> {}".format(r.rating, my_gamma))
             g[i] += len(r.wins)                              # Bradley-Terry
             for w in r.wins + r.losses:
-                dprint("{} @ {} gamma {} -> ".format(w, r.date, w.get_rating(r.date)), end="")
+                # dprint("{} @ {} gamma {} -> ".format(w, r.date, w.get_rating(r.date)), end="")
                 their_gamma = r_to_gamma(w.get_rating(r.date))
-                dprint("{}".format(their_gamma))
+                # dprint("{}".format(their_gamma))
                 factor = 1. / (my_gamma + their_gamma)
                 g[i] -= my_gamma * factor                    # Bradley-Terry
                 H[i,i] -= my_gamma * their_gamma * factor**2 # Bradley-Terry
@@ -209,7 +209,7 @@ class Player:
                 dr = r.rating - self.rating_history[i-1].rating
                 dt = r.date - self.rating_history[i-1].date
                 sigmasq_recip = 1./(dt * wsq)
-                dprint("dr {} dt {} sigmasq_recip {}".format(dr, dt, sigmasq_recip))
+                # dprint("dr {} dt {} sigmasq_recip {}".format(dr, dt, sigmasq_recip))
                 g[i] -= dr * sigmasq_recip                   # Wiener
                 H[i,i] -= sigmasq_recip                      # Wiener
                 if i >= 1:
@@ -222,7 +222,7 @@ class Player:
     # Return magnitude of changes
     def iterate_whr(self):
         if self.root: return 0.0
-        dprint("\niterate_whr {} {}".format(self.handle, self.rating_history))
+        # dprint("\niterate_whr {} {}".format(self.handle, self.rating_history))
 
         (H, g) = self.compute_derivatives()
         num_points = H.shape[0]
@@ -252,16 +252,16 @@ class Player:
         for (i,r) in enumerate(self.rating_history):
             r.rating -= x[i]
 
-        dprint("g", g)
-        dprint("H", H)
-        dprint("d", d)
-        dprint("b", b)
-        dprint("a", a)
-        dprint("x", x)
-        # dprint("xn", xn)
-        dprint("y", y)
+        # dprint("g", g)
+        # dprint("H", H)
+        # dprint("d", d)
+        # dprint("b", b)
+        # dprint("a", a)
+        # dprint("x", x)
+        # # dprint("xn", xn)
+        # dprint("y", y)
 
-        dprint("new ratings {} {}".format(self.handle, self.rating_history))
+        # dprint("new ratings {} {}".format(self.handle, self.rating_history))
         return np.linalg.norm(x)
 
     # Return list of std deviation at each rating point
