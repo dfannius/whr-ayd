@@ -124,6 +124,16 @@ class Player:
             if appending:
                 self.rating_history.append(RatingDatum(date, ayd_rating, rating, std))
 
+        for r in self.rating_history:
+            self.rating_hash[r.date] = r
+
+    def copy_rating_history_from(self, other):
+        for r in self.rating_history:
+            if r.date in other.rating_hash:
+                other_r = other.rating_hash[r.date]
+                r.rating = other_r.rating
+                r.gamma = other_r.gamma
+
     def add_game(self, game):
         self.games.append(game)
 
@@ -316,6 +326,11 @@ class PlayerDB:
     def get_root_player(self):
         return self.root_player
 
+    def copy_rating_history_from(self, other_db):
+        for (handle, player) in self.player_map.items():
+            if handle in other_db.player_map:
+                player.copy_rating_history_from(other_db.player_map[handle])
+
     def __getitem__(self, handle):
         return self.player_map[handle]
 
@@ -343,66 +358,70 @@ def parse_seasons(player_db, out_fname):
     seasons = range(8, 22)
     for season in seasons:
         fn = "seasons/season_{:02d}.html".format(season)
-        soup = BeautifulSoup(open(fn), "lxml")
+        if not os.path.isfile(fn):
+            break
+        print(".", end="", flush=True)
+        with open(fn) as f:
+            soup = BeautifulSoup(f, "lxml")
 
-        # First find the names of the cycles
-        season_cycles = [] # Names of cycles within this season, in chronological order
+            # First find the names of the cycles
+            season_cycles = [] # Names of cycles within this season, in chronological order
 
-        cycle_tags = soup.find_all(is_cycle_name)
-        for cycle_tag in cycle_tags:
-            date = cycle_to_date(cycle_tag.contents[0])
-            if date not in season_cycles:
-                season_cycles.append(date)
-        season_cycles.reverse()
+            cycle_tags = soup.find_all(is_cycle_name)
+            for cycle_tag in cycle_tags:
+                date = cycle_to_date(cycle_tag.contents[0])
+                if date not in season_cycles:
+                    season_cycles.append(date)
+            season_cycles.reverse()
 
-        # Now find the crosstables
-        crosstables = soup.find_all("table", id="pointsTable")
-        for crosstable in crosstables:
-            # Find the name and date of this table
-            crosstable_name = crosstable.find_parent("table").previous_sibling
-            while type(crosstable_name) is NavigableString or crosstable_name.name != "h3":
-                crosstable_name = crosstable_name.previous_sibling
-            crosstable_date = cycle_to_date(crosstable_name.contents[0])
-            date = total_num_cycles + season_cycles.index(crosstable_date)
+            # Now find the crosstables
+            crosstables = soup.find_all("table", id="pointsTable")
+            for crosstable in crosstables:
+                # Find the name and date of this table
+                crosstable_name = crosstable.find_parent("table").previous_sibling
+                while type(crosstable_name) is NavigableString or crosstable_name.name != "h3":
+                    crosstable_name = crosstable_name.previous_sibling
+                crosstable_date = cycle_to_date(crosstable_name.contents[0])
+                date = total_num_cycles + season_cycles.index(crosstable_date)
 
-            # Construct the list of players, in order
-            crosstable_players = []
-            trs = crosstable.find_all("tr")
-            for tr in trs:
-                tds = tr.find_all("td")
-                if len(tds) > 0:
-                    name = tds[1].nobr.a.contents[0]
-                    handle = tds[2].contents[0]
-                    ayd_rating = int(tds[11].contents[0])
-                    player = player_db.get_player(name, handle)
-                    player.set_ayd_rating(date, ayd_rating)
-                    crosstable_players.append(player)
+                # Construct the list of players, in order
+                crosstable_players = []
+                trs = crosstable.find_all("tr")
+                for tr in trs:
+                    tds = tr.find_all("td")
+                    if len(tds) > 0:
+                        name = tds[1].nobr.a.contents[0]
+                        handle = tds[2].contents[0]
+                        ayd_rating = int(tds[11].contents[0])
+                        player = player_db.get_player(name, handle)
+                        player.set_ayd_rating(date, ayd_rating)
+                        crosstable_players.append(player)
 
-            # Parse game results
-            row_player_idx = 0
-            for tr in trs:
-                tds = tr.find_all("td")
-                if len(tds) > 0:
-                    for col_player_idx in range(row_player_idx + 1, len(crosstable_players)):
-                        gif = tds[3+col_player_idx].find("img")["src"]
-                        if gif:
-                            if gif.endswith("won.gif"):
-                                winner = crosstable_players[row_player_idx]
-                                loser = crosstable_players[col_player_idx]
-                            elif gif.endswith("lost.gif"):
-                                winner = crosstable_players[col_player_idx]
-                                loser = crosstable_players[row_player_idx]
-                            else: # empty or forfeit
-                                continue
-                            game = Game(date, winner, winner.get_ayd_rating(date),
-                                        loser, loser.get_ayd_rating(date))
-                            games.append(game)
-                            winner.add_game(game)
-                            loser.add_game(game)
-                    row_player_idx += 1
+                # Parse game results
+                row_player_idx = 0
+                for tr in trs:
+                    tds = tr.find_all("td")
+                    if len(tds) > 0:
+                        for col_player_idx in range(row_player_idx + 1, len(crosstable_players)):
+                            gif = tds[3+col_player_idx].find("img")["src"]
+                            if gif:
+                                if gif.endswith("won.gif"):
+                                    winner = crosstable_players[row_player_idx]
+                                    loser = crosstable_players[col_player_idx]
+                                elif gif.endswith("lost.gif"):
+                                    winner = crosstable_players[col_player_idx]
+                                    loser = crosstable_players[row_player_idx]
+                                else: # empty or forfeit
+                                    continue
+                                game = Game(date, winner, winner.get_ayd_rating(date),
+                                            loser, loser.get_ayd_rating(date))
+                                games.append(game)
+                                winner.add_game(game)
+                                loser.add_game(game)
+                        row_player_idx += 1
 
-        # Add an extra month between seasons
-        total_num_cycles += len(season_cycles) + 1
+            # Add an extra month between seasons
+            total_num_cycles += len(season_cycles) + 1
 
     with open(out_fname, "w") as out_file:
         for g in games:
@@ -445,14 +464,13 @@ def iterate_whr(player_db):
     return math.sqrt(sum_xsq)
 
 def run_whr(player_db):
-    init_whr(player_db)
     for i in range(1000):
         # print("ITERATION {}".format(i))
         change = iterate_whr(player_db)
         avg_change = change / len(player_db) # maybe should be avg change per rating point?
         # print("avg change", avg_change)
         if avg_change < 0.005:
-            print("{} iterations".format(i+1))
+            print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""), end="", flush=True)
             break
     for p in player_db.values():
         p.compute_stds()
@@ -481,19 +499,26 @@ def load_rating_history(player_db, fname):
             p.read_rating_history(row[2:])
 
 if args.parse_seasons:
+    print("Parsing seasons...", end="", flush=True) 
     parse_seasons(the_player_db, args.games_file)
 else:
+    print("Reading games file...", end="", flush=True) 
     read_games_file(the_player_db, args.games_file)
+init_whr(the_player_db)
 
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_ayd
 if args.load_ratings or (need_ratings and not args.analyze_games):
-    load_rating_history(the_player_db, args.ratings_file)
+    old_player_db = PlayerDB()
+    load_rating_history(old_player_db, args.ratings_file)
+    the_player_db.copy_rating_history_from(old_player_db)
 
 if args.analyze_games:
+    print("Running WHR...", end="", flush=True) 
     run_whr(the_player_db)
     save_rating_history(the_player_db, args.ratings_file)
 
 if args.print_report:
+    print("Printing report...", end="", flush=True) 
     print_report(the_player_db, args.report_file)
 
 plt.style.use("seaborn-darkgrid")
@@ -575,3 +600,5 @@ if args.whr_vs_ayd:
     plt.xlabel("WHR rating")
     plt.ylabel("AYD rating")
     plt.show()
+
+print("Done.")
