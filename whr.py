@@ -13,8 +13,12 @@ parser.add_argument("--ratings-file", type=str, default="ratings.csv", metavar="
                     help="File of ratings data")
 parser.add_argument("--report-file", type=str, default="report.txt", metavar="F",
                     help="File with ratings report")
+parser.add_argument("--read-games", action="store_true", default=False,
+                    help="Read games file before parsing new seasons")
 parser.add_argument("--parse-seasons", action="store_true", default=False,
                     help="Parse HTML season files into game data file")
+parser.add_argument("--parse-season-start", type=int, default=8, metavar="N",
+                    help="Season to start parsing HTML files from")
 parser.add_argument("--analyze-games", action="store_true", default=False,
                     help="Analyze game data file")
 parser.add_argument("--print-report", action="store_true", default=False,
@@ -45,6 +49,9 @@ def date_to_season_cycle(d):
 def date_to_str(d):
     season, cycle = date_to_season_cycle(d)
     return "{}{}".format(season, "ABC"[cycle])
+
+def season_cycle_to_date(s, c):
+    return (s-8)*4 + c
 
 DEBUG = False
 def dprint(*args, **kwargs):
@@ -136,6 +143,9 @@ class Player:
 
     def add_game(self, game):
         self.games.append(game)
+
+    def remove_recent_games(self, start_date):
+        self.games = [g for g in self.games if g.date < start_date]
 
     def latest_rating(self):
         if len(self.rating_history) == 0:
@@ -331,6 +341,10 @@ class PlayerDB:
             if handle in other_db.player_map:
                 player.copy_rating_history_from(other_db.player_map[handle])
 
+    def remove_recent_games(self, start_date):
+        for p in self.player_map.values():
+            p.remove_recent_games(start_date)
+
     def __getitem__(self, handle):
         return self.player_map[handle]
 
@@ -350,17 +364,20 @@ the_player_db = PlayerDB()
 def cycle_to_date(s):
     return s.split(", ")[-1]
 
-def parse_seasons(player_db, out_fname):
+def parse_seasons(player_db, start_season, out_fname, existing_games):
     # There are three cycles (e.g., "January 2014", "February 2014", "March 2014") in a season (e.g., 8)
-    total_num_cycles = 0            # number of cycles in all previous seasons combined
-    games = []
+    start_date = season_cycle_to_date(start_season, 0)
+    total_num_cycles = start_date
 
-    seasons = range(8, 22)
+    player_db.remove_recent_games(start_date)
+    games = [g for g in existing_games if g.date < start_date]
+
+    seasons = range(start_season, 22)
     for season in seasons:
         fn = "seasons/season_{:02d}.html".format(season)
         if not os.path.isfile(fn):
             break
-        print(".", end="", flush=True)
+        print("{}...".format(season), end="", flush=True)
         with open(fn) as f:
             soup = BeautifulSoup(f, "lxml")
 
@@ -437,6 +454,7 @@ def parse_seasons(player_db, out_fname):
 # As produced by analyze_seasons()
 def read_games_file(player_db, fname):
     player_db.clear()
+    games = []
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
@@ -448,10 +466,12 @@ def read_games_file(player_db, fname):
             winner = player_db.get_player(winner_name, winner_handle)
             loser = player_db.get_player(loser_name, loser_handle)
             game = Game(date, winner, winner_ayd_rating, loser, loser_ayd_rating)
+            games.append(game)
             winner.add_game(game)
             loser.add_game(game)
             winner.set_ayd_rating(date, winner_ayd_rating)
             loser.set_ayd_rating(date, loser_ayd_rating)
+    return games
 
 def init_whr(player_db):
     for p in player_db.values():
@@ -499,8 +519,12 @@ def load_rating_history(player_db, fname):
             p.read_rating_history(row[2:])
 
 if args.parse_seasons:
+    games = []
+    if args.read_games:
+        print("Reading games file...", end="", flush=True) 
+        games = read_games_file(the_player_db, args.games_file)
     print("Parsing seasons...", end="", flush=True) 
-    parse_seasons(the_player_db, args.games_file)
+    parse_seasons(the_player_db, args.parse_season_start, args.games_file, games)
 else:
     print("Reading games file...", end="", flush=True) 
     read_games_file(the_player_db, args.games_file)
