@@ -1,0 +1,3 @@
+#!/bin/bash
+python download-archive.py 21
+python whr.py --load-ratings --parse-seasons --analyze-games --print-report
