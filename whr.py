@@ -490,7 +490,7 @@ def run_whr(player_db):
         change = iterate_whr(player_db)
         avg_change = change / len(player_db) # maybe should be avg change per rating point?
         # print("avg change", avg_change)
-        if avg_change < 0.005:
+        if avg_change < 0.001:
             print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""), end="", flush=True)
             break
     for p in player_db.values():
