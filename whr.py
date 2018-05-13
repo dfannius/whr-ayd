@@ -140,6 +140,7 @@ class Player:
                 other_r = other.rating_hash[r.date]
                 r.rating = other_r.rating
                 r.gamma = other_r.gamma
+                r.std = other_r.std
 
     def add_game(self, game):
         self.games.append(game)
