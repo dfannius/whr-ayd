@@ -29,17 +29,26 @@ parser.add_argument("--draw-graph", type=str, default=None, metavar="H",
                     help="Handle of user's graph to draw")
 parser.add_argument("--whr-vs-ayd", action="store_true", default=False,
                     help="Draw scatterplot of WHR vs AYD ratings")
+parser.add_argument("--league", type=str, default="ayd", metavar="S",
+                    help="League (ayd or eyd)")
 
 args = parser.parse_args()
 
+# "rank" roughly corresponds to AGA ratings.
 def rating_to_rank(raw_r):
     # To convert to AGA ratings it seems that we should divide raw_r
-    # by 1.6, but that compresses ranks more than I like.
-    r = raw_r - 1
-    if r >= 1:
-        return "{:.2f}d".format(r)
+    # by 1.6, but to get ratings to match up at all at both the top
+    # and bottom of the population I need to multiply instead.
+    return raw_r * 1.7 - 1.2
+
+def rank_to_rank_str(rank):
+    if rank >= 1:
+        return "{:.2f}d".format(rank)
     else:
-        return "{:.2f}k".format(2-r)
+        return "{:.2f}k".format(2-rank)
+
+def rating_to_rank_str(raw_r):
+    return rank_to_rank_str(rating_to_rank(raw_r))
 
 def date_to_season_cycle(d):
     season = int(d/4) + 8
@@ -78,7 +87,7 @@ class RatingDatum:
         self.std = std
 
     def __repr__(self):
-        return "{}: {}".format(self.date, rating_to_rank(self.rating))
+        return "{}: {}".format(self.date, rating_to_rank_str(self.rating))
 
 class Player:
     def __init__(self, name, handle, player_db, is_root=False):
@@ -221,7 +230,7 @@ class Player:
     def compute_derivatives(self):
         # The WHR paper expresses w^2 in units of Elo^2/day. The conversion to r^2/month
         # means multiplying by (ln(10) / 400)^2 * 30 ~= 0.001
-        elo_wsq = 300
+        elo_wsq = 100           # I've also tried 300 but this looks good
         wsq = elo_wsq * 0.001
 
         num_points = len(self.rating_history)
@@ -375,7 +384,7 @@ def parse_seasons(player_db, start_season, out_fname, existing_games):
 
     seasons = range(start_season, 22)
     for season in seasons:
-        fn = "seasons/season_{:02d}.html".format(season)
+        fn = "{}-seasons/season_{:02d}.html".format(args.league, season)
         if not os.path.isfile(fn):
             break
         print("{}...".format(season), end="", flush=True)
@@ -501,7 +510,7 @@ def print_report(player_db, fname):
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
             if len(p.rating_history) > 0:
                 print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
-                                                         rating_to_rank(p.latest_rating()),
+                                                         rating_to_rank_str(p.latest_rating()),
                                                          p.rating_history[-1].std,
                                                          p.rating_history[1:]),
                       file=f)
@@ -578,24 +587,25 @@ if args.draw_graph:
     history = p.rating_history[1:]
     dates = [r.date for r in history]
     ratings = [r.rating for r in history]
-    plt.title("\n" + handle + "\n")
-    plt.fill_between(dates,
-                     [r.rating - r.std for r in history], 
-                     [r.rating + r.std for r in history],
-                     alpha=0.2)
-    plt.plot(dates, ratings)
-    (tick_vals, tick_labels) = plt.yticks()
-    new_tick_labels = [rating_to_rank(r) for r in tick_vals]
-    plt.yticks(tick_vals, new_tick_labels)
-    # plt.xticks(dates, [date_to_str(d) for d in dates])
-    plt.xticks(dates, date_str_ticks(dates))
-    plt.xlabel("Season")
-    plt.ylabel("Rank")
-    plt.savefig("{}/{}.png".format(plot_dir, handle))
-    plt.show()
+    with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
+        plt.title("\n" + handle + "\n")
+        plt.fill_between(dates,
+                         [rating_to_rank(r.rating - r.std) for r in history], 
+                         [rating_to_rank(r.rating + r.std) for r in history],
+                         alpha=0.2)
+        plt.plot(dates, [rating_to_rank(r) for r in ratings])
+        (tick_vals, tick_labels) = plt.yticks()
+        new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
+        plt.yticks(tick_vals, new_tick_labels)
+        # plt.xticks(dates, [date_to_str(d) for d in dates])
+        plt.xticks(dates, date_str_ticks(dates))
+        plt.xlabel("Season")
+        plt.ylabel("Rank")
+        plt.savefig("{}/{}.png".format(plot_dir, handle))
+        plt.show()
 
 if args.whr_vs_ayd:
-    players = [p for p in player_db.values() if len(p.rating_history) > 1]
+    players = [p for p in the_player_db.values() if len(p.rating_history) > 1]
     whr_ratings = [p.latest_rating() for p in players]
     ayd_ratings = [p.latest_ayd_rating() for p in players]
 
@@ -604,7 +614,7 @@ if args.whr_vs_ayd:
 
     plt.scatter(whr_ratings, ayd_ratings)
     (tick_vals, tick_labels) = plt.xticks()
-    new_tick_labels = [rating_to_rank(r) for r in tick_vals]
+    new_tick_labels = [rating_to_rank_str(r) for r in tick_vals]
     plt.xticks(tick_vals, new_tick_labels)
 
     callout = None              # player to highlight
