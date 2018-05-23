@@ -495,6 +495,8 @@ def iterate_whr(player_db):
 
 def run_whr(player_db):
     for i in range(1000):
+        if (i+1) % 100 == 0:
+            print("{}...".format(i+1), end="", flush=True)
         # print("ITERATION {}".format(i))
         change = iterate_whr(player_db)
         avg_change = change / len(player_db) # maybe should be avg change per rating point?
