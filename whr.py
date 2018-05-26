@@ -181,6 +181,22 @@ class Player:
         else:
             return self.rating_hash[date].gamma
 
+    def get_wins(self):
+        results = []
+        for r in self.rating_history:
+            for w in r.wins:
+                if not w.root:
+                    results.append((r.date, w.get_rating(r.date)))
+        return results
+
+    def get_losses(self):
+        results = []
+        for r in self.rating_history:
+            for l in r.losses:
+                if not l.root:
+                    results.append((r.date, l.get_rating(r.date)))
+        return results
+
     def get_rating(self, date):
         if self.root:
             return 0
@@ -315,7 +331,6 @@ class Player:
         Hinv = np.linalg.inv(H)
         for (i,r) in enumerate(self.rating_history):
             r.set_std(math.sqrt(-Hinv[i,i]))
-
 
 class Game:
     def __init__(self, date, winner, winner_ayd_rating, loser, loser_ayd_rating):
@@ -589,22 +604,34 @@ if args.draw_graph:
     history = p.rating_history[1:]
     dates = [r.date for r in history]
     ratings = [r.rating for r in history]
-    with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
-        plt.title("\n" + handle + "\n")
-        plt.fill_between(dates,
-                         [rating_to_rank(r.rating - r.std) for r in history], 
-                         [rating_to_rank(r.rating + r.std) for r in history],
-                         alpha=0.2)
-        plt.plot(dates, [rating_to_rank(r) for r in ratings])
-        (tick_vals, tick_labels) = plt.yticks()
-        new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
-        plt.yticks(tick_vals, new_tick_labels)
-        # plt.xticks(dates, [date_to_str(d) for d in dates])
-        plt.xticks(dates, date_str_ticks(dates))
-        plt.xlabel("Season")
-        plt.ylabel("Rank")
-        plt.savefig("{}/{}.png".format(plot_dir, handle))
-        plt.show()
+    # with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
+    plt.title("\n" + handle + "\n")
+    plt.fill_between(dates,
+                     [rating_to_rank(r.rating - r.std) for r in history], 
+                     [rating_to_rank(r.rating + r.std) for r in history],
+                     alpha=0.2)
+    plt.plot(dates, [rating_to_rank(r) for r in ratings])
+    wins = p.get_wins()
+    if len(wins) > 0:
+        win_dates, win_ratings = zip(*wins)
+        plt.scatter(win_dates,
+                    [rating_to_rank(r) for r in win_ratings],
+                    edgecolors="green", facecolors="none", marker="o")
+    losses = p.get_losses()
+    if len(losses) > 0:
+        loss_dates, loss_ratings = zip(*losses)
+        plt.scatter(loss_dates,
+                    [rating_to_rank(r) for r in loss_ratings],
+                    color="red", marker="x")
+    
+    (tick_vals, tick_labels) = plt.yticks()
+    new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
+    plt.yticks(tick_vals, new_tick_labels)
+    plt.xticks(dates, date_str_ticks(dates))
+    plt.xlabel("Season")
+    plt.ylabel("Rank")
+    plt.savefig("{}/{}.png".format(plot_dir, handle))
+    plt.show()
 
 if args.whr_vs_ayd:
     players = [p for p in the_player_db.values() if len(p.rating_history) > 1]
