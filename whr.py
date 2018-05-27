@@ -611,6 +611,7 @@ if args.draw_graph:
                      [rating_to_rank(r.rating + r.std) for r in history],
                      alpha=0.2)
     plt.plot(dates, [rating_to_rank(r) for r in ratings])
+
     wins = p.get_wins()
     if len(wins) > 0:
         win_dates, win_ratings = zip(*wins)
@@ -635,30 +636,35 @@ if args.draw_graph:
 
 if args.whr_vs_ayd:
     players = [p for p in the_player_db.values() if len(p.rating_history) > 1]
-    whr_ratings = [p.latest_rating() for p in players]
+    # players = [p for p in players if p.rating_history[-1].date >= 50]
+    whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     ayd_ratings = [p.latest_ayd_rating() for p in players]
 
-    W = np.vstack([whr_ratings, np.ones(len(whr_ratings))]).T
+    W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
     (lsq, resid, rank, sing) = np.linalg.lstsq(W, ayd_ratings)
 
-    plt.scatter(whr_ratings, ayd_ratings)
+    plt.scatter(whr_ranks, ayd_ratings, s=4)
     (tick_vals, tick_labels) = plt.xticks()
-    new_tick_labels = [rating_to_rank_str(r) for r in tick_vals]
+    new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
     plt.xticks(tick_vals, new_tick_labels)
 
     callout = None              # player to highlight
-    if callout: plt.scatter([callout.latest_rating()], [callout.latest_ayd_rating()])
+    if callout: plt.scatter([rating_to_rank(callout.latest_rating())], [callout.latest_ayd_rating()])
 
-    plt.plot(whr_ratings, [lsq[0] * r + lsq[1] for r in whr_ratings])
+    # plt.plot(whr_ranks, [lsq[0] * r + lsq[1] for r in whr_ranks])
     # Maybe we should divide by std
-    deltas = [(ayd_ratings[i] - (lsq[0] * whr_ratings[i] + lsq[1])) for i in range(len(players))]
+    deltas = [(ayd_ratings[i] - (lsq[0] * whr_ranks[i] + lsq[1])) for i in range(len(players))]
     abs_deltas = [abs(d) for d in deltas]
     delta_cutoff = sorted(abs_deltas, reverse=True)[9]
     for (i, p) in enumerate(players):
         if abs_deltas[i] >= delta_cutoff or p == callout:
+            plt.scatter([whr_ranks[i]], [ayd_ratings[i]], s=4, c="orange")
+            xytext = (-5,-2) if deltas[i] > 0 else (5,-2)
+            horizontalalignment = "right" if deltas[i] > 0 else "left"
             plt.annotate(p.handle,
-                         (whr_ratings[i], ayd_ratings[i]),
-                         xytext=(5,2),
+                         (whr_ranks[i], ayd_ratings[i]),
+                         xytext=xytext,
+                         horizontalalignment=horizontalalignment,
                          textcoords="offset points")
 
     plt.xlabel("WHR rating")
