@@ -39,7 +39,7 @@ def rating_to_rank(raw_r):
     # To convert to AGA ratings it seems that we should divide raw_r
     # by 1.6, but to get ratings to match up at all at both the top
     # and bottom of the population I need to multiply instead.
-    return raw_r * 1.7 - 1.2
+    return raw_r * 1.6 - 1.2
 
 def rank_to_rank_str(rank):
     if rank >= 1:
@@ -636,7 +636,7 @@ if args.draw_graph:
 
 if args.whr_vs_ayd:
     players = [p for p in the_player_db.values() if len(p.rating_history) > 1]
-    # players = [p for p in players if p.rating_history[-1].date >= 50]
+    # players = [p for p in players if p.rating_history[-1].date >= 52]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     ayd_ratings = [p.latest_ayd_rating() for p in players]
 
