@@ -1,3 +1,6 @@
+# - EYD: need to handle that season archives are split up into
+#   separate pages starting in season 10
+
 import argparse
 from bs4 import BeautifulSoup, NavigableString
 import csv
@@ -6,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-parser = argparse.ArgumentParser(description='WHR for AYD')
+parser = argparse.ArgumentParser(description="WHR for AYD")
 parser.add_argument("--games-file", type=str, default="games.csv", metavar="F",
                     help="File of game data")
 parser.add_argument("--ratings-file", type=str, default="ratings.csv", metavar="F",
@@ -17,7 +20,7 @@ parser.add_argument("--read-games", action="store_true", default=False,
                     help="Read games file before parsing new seasons")
 parser.add_argument("--parse-seasons", action="store_true", default=False,
                     help="Parse HTML season files into game data file")
-parser.add_argument("--parse-season-start", type=int, default=8, metavar="N",
+parser.add_argument("--parse-season-start", type=int, default=1, metavar="N",
                     help="Season to start parsing HTML files from")
 parser.add_argument("--analyze-games", action="store_true", default=False,
                     help="Analyze game data file")
@@ -33,6 +36,14 @@ parser.add_argument("--league", type=str, default="ayd", metavar="S",
                     help="League (ayd or eyd)")
 
 args = parser.parse_args()
+
+games_file = "{}-{}".format(args.league, args.games_file)
+ratings_file = "{}-{}".format(args.league, args.ratings_file)
+report_file = "{}-{}".format(args.league, args.report_file)
+start_season = 8 if args.league == "ayd" else 1
+
+if args.parse_season_start < start_season:
+    args.parse_season_start = start_season
 
 # "rank" roughly corresponds to AGA ratings.
 def rating_to_rank(raw_r):
@@ -51,8 +62,8 @@ def rating_to_rank_str(raw_r):
     return rank_to_rank_str(rating_to_rank(raw_r))
 
 def date_to_season_cycle(d):
-    season = int(d/4) + 8
-    cycle = d - (season-8) * 4
+    season = int(d/4) + start_season
+    cycle = d - (season-start_season) * 4
     return (season, cycle)
 
 def date_to_str(d):
@@ -60,7 +71,7 @@ def date_to_str(d):
     return "{}{}".format(season, "ABC"[cycle])
 
 def season_cycle_to_date(s, c):
-    return (s-8)*4 + c
+    return (s-start_season)*4 + c
 
 DEBUG = False
 def dprint(*args, **kwargs):
@@ -68,7 +79,8 @@ def dprint(*args, **kwargs):
         print(*args, **kwargs)
 
 def is_cycle_name(tag):
-    return tag.name == "b" and tag.contents[0].startswith("AYD")
+    return (tag.name == "b" and tag.contents[0].startswith("AYD") or
+            tag.name == "h3" and "League" in tag.contents[0])
 
 def r_to_gamma(r):
     return math.exp(r)
@@ -403,7 +415,7 @@ def parse_seasons(player_db, start_season, out_fname, existing_games):
         if not os.path.isfile(fn):
             break
         print("{}...".format(season), end="", flush=True)
-        with open(fn) as f:
+        with open(fn, "rb") as f:
             soup = BeautifulSoup(f, "lxml")
 
             # First find the names of the cycles
@@ -549,28 +561,28 @@ if args.parse_seasons:
     games = []
     if args.read_games:
         print("Reading games file...", end="", flush=True) 
-        games = read_games_file(the_player_db, args.games_file)
+        games = read_games_file(the_player_db, games_file)
     print("Parsing seasons...", end="", flush=True) 
-    parse_seasons(the_player_db, args.parse_season_start, args.games_file, games)
+    parse_seasons(the_player_db, args.parse_season_start, games_file, games)
 else:
     print("Reading games file...", end="", flush=True) 
-    read_games_file(the_player_db, args.games_file)
+    read_games_file(the_player_db, games_file)
 init_whr(the_player_db)
 
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_ayd
 if args.load_ratings or (need_ratings and not args.analyze_games):
     old_player_db = PlayerDB()
-    load_rating_history(old_player_db, args.ratings_file)
+    load_rating_history(old_player_db, ratings_file)
     the_player_db.copy_rating_history_from(old_player_db)
 
 if args.analyze_games:
     print("Running WHR...", end="", flush=True) 
     run_whr(the_player_db)
-    save_rating_history(the_player_db, args.ratings_file)
+    save_rating_history(the_player_db, ratings_file)
 
 if args.print_report:
     print("Printing report...", end="", flush=True) 
-    print_report(the_player_db, args.report_file)
+    print_report(the_player_db, report_file)
 
 plt.style.use("seaborn-darkgrid")
 
