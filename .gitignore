@@ -1,5 +1,5 @@
 plots/*
-seasons/*
-games.csv
-ratings.csv
-report.txt
+*-seasons/*
+*-games.csv
+*-ratings.csv
+*-report.txt
