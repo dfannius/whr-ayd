@@ -15,10 +15,10 @@ if not os.path.exists(dir):
     os.mkdir(dir)
 
 if args.season > 0:
+    seasons = [args.season]
+else:
     start_date = 1 if args.league == "eyd" else 8
     seasons = range(start_date, 22)
-else:
-    seasons = [args.start_date]
 
 for season in seasons:
     season_url = "https://{}.yunguseng.com/season{}/overview.html".format(args.league, season)
