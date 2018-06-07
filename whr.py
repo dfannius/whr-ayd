@@ -52,11 +52,18 @@ def rating_to_rank(raw_r):
     # and bottom of the population I need to multiply instead.
     return raw_r * 1.6 - 1.2
 
-def rank_to_rank_str(rank):
-    if rank >= 1:
-        return "{:.2f}d".format(rank)
+def rank_to_rank_str(rank, integral=False):
+    if integral and int(rank) == rank:
+        dan_fmt = "{}d"
+        kyu_fmt = "{}k"
+        rank = int(rank)
     else:
-        return "{:.2f}k".format(2-rank)
+        dan_fmt = "{:.2f}d"
+        kyu_fmt = "{:.2f}d"
+    if rank >= 1:
+        return dan_fmt.format(rank)
+    else:
+        return kyu_fmt.format(2-rank)
 
 def rating_to_rank_str(raw_r):
     return rank_to_rank_str(rating_to_rank(raw_r))
@@ -617,29 +624,37 @@ if args.draw_graph:
     dates = [r.date for r in history]
     ratings = [r.rating for r in history]
     # with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
+
     plt.title("\n" + handle + "\n")
     plt.fill_between(dates,
                      [rating_to_rank(r.rating - r.std) for r in history], 
                      [rating_to_rank(r.rating + r.std) for r in history],
                      alpha=0.2)
-    plt.plot(dates, [rating_to_rank(r) for r in ratings])
+    ranks = [rating_to_rank(r) for r in ratings]
+    plotted_ranks = ranks
+    plt.plot(dates, ranks)
 
     wins = p.get_wins()
     if len(wins) > 0:
         win_dates, win_ratings = zip(*wins)
-        plt.scatter(win_dates,
-                    [rating_to_rank(r) for r in win_ratings],
-                    edgecolors="green", facecolors="none", marker="o")
+        win_ranks = [rating_to_rank(r) for r in win_ratings]
+        plotted_ranks += win_ranks
+        plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
     losses = p.get_losses()
     if len(losses) > 0:
         loss_dates, loss_ratings = zip(*losses)
-        plt.scatter(loss_dates,
-                    [rating_to_rank(r) for r in loss_ratings],
-                    color="red", marker="x")
+        loss_ranks = [rating_to_rank(r) for r in loss_ratings]
+        plotted_ranks += loss_ranks
+        plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
     
-    (tick_vals, tick_labels) = plt.yticks()
-    new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
-    plt.yticks(tick_vals, new_tick_labels)
+    y_min = int(min(plotted_ranks) - 1)
+    y_max = int(max(plotted_ranks) + 1)
+    plt.ylim(y_min, y_max)
+
+    # (tick_vals, tick_labels) = plt.yticks()
+    new_tick_vals = np.arange(y_min, y_max + 1, 1.0)
+    new_tick_labels = [rank_to_rank_str(r, True) for r in new_tick_vals]
+    plt.yticks(new_tick_vals, new_tick_labels)
     plt.xticks(dates, date_str_ticks(dates))
     plt.xlabel("Season")
     plt.ylabel("Rank")
