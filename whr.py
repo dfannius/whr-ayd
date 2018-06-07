@@ -50,7 +50,7 @@ def rating_to_rank(raw_r):
     # To convert to AGA ratings it seems that we should divide raw_r
     # by 1.6, but to get ratings to match up at all at both the top
     # and bottom of the population I need to multiply instead.
-    return raw_r * 1.6 - 1.2
+    return raw_r * 1.5 - 1.2
 
 def rank_to_rank_str(rank, integral=False):
     if integral and int(rank) == rank:
@@ -59,7 +59,7 @@ def rank_to_rank_str(rank, integral=False):
         rank = int(rank)
     else:
         dan_fmt = "{:.2f}d"
-        kyu_fmt = "{:.2f}d"
+        kyu_fmt = "{:.2f}k"
     if rank >= 1:
         return dan_fmt.format(rank)
     else:
