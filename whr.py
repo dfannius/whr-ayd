@@ -34,6 +34,8 @@ parser.add_argument("--whr-vs-ayd", action="store_true", default=False,
                     help="Draw scatterplot of WHR vs AYD ratings")
 parser.add_argument("--league", type=str, default="ayd", metavar="S",
                     help="League (ayd or eyd)")
+parser.add_argument("--min-date", type=int, default=0, metavar="N",
+                    help="Mininum active date for players in graph")
 
 args = parser.parse_args()
 
@@ -127,6 +129,12 @@ class Player:
 
     def get_ayd_rating(self, date):
         return self.ayd_ratings.get(date, 0)
+
+    def include_in_graph(self):
+        if self.root: return False
+        if len(self.rating_history) <= 1: return False
+        if self.handle == "Chimin": return False
+        return True
 
     def write_rating_history(self, f):
         print('"{}","{}",{}'.format(self.name, self.handle, len(self.rating_history)), file=f, end="")
@@ -662,8 +670,8 @@ if args.draw_graph:
     plt.show()
 
 if args.whr_vs_ayd:
-    players = [p for p in the_player_db.values() if len(p.rating_history) > 1]
-    # players = [p for p in players if p.rating_history[-1].date >= 52]
+    players = [p for p in the_player_db.values() if p.include_in_graph()]
+    players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     ayd_ratings = [p.latest_ayd_rating() for p in players]
 
