@@ -1,13 +1,13 @@
-# - EYD: need to handle that season archives are split up into
-#   separate pages starting in season 10
-
 import argparse
 from bs4 import BeautifulSoup, NavigableString
 import csv
+import glob
 import math
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import re
+import sys
 
 parser = argparse.ArgumentParser(description="WHR for AYD")
 parser.add_argument("--games-file", type=str, default="games.csv", metavar="F",
@@ -42,10 +42,7 @@ args = parser.parse_args()
 games_file = "{}-{}".format(args.league, args.games_file)
 ratings_file = "{}-{}".format(args.league, args.ratings_file)
 report_file = "{}-{}".format(args.league, args.report_file)
-start_season = 8 if args.league == "ayd" else 1
-
-if args.parse_season_start < start_season:
-    args.parse_season_start = start_season
+start_season = 0
 
 # "rank" roughly corresponds to AGA ratings.
 def rating_to_rank(raw_r):
@@ -419,17 +416,28 @@ def cycle_to_date(s):
 def parse_seasons(player_db, start_season, out_fname, existing_games):
     # There are three cycles (e.g., "January 2014", "February 2014", "March 2014") in a season (e.g., 8)
     start_date = season_cycle_to_date(start_season, 0)
-    total_num_cycles = start_date
+
+    overview_files = glob.glob("{}-overviews/*-overview.html".format(args.league))
+    overview_file_array = []
+    overview_file_re = re.compile(r"(\d+)-overview.html")
+    for fn in overview_files:
+        match = re.search(overview_file_re, fn)
+        if match:
+            date = int(match.group(1))
+            while date >= len(overview_file_array):
+                overview_file_array.append(None)
+            overview_file_array[date] = fn
 
     player_db.remove_recent_games(start_date)
     games = [g for g in existing_games if g.date < start_date]
 
-    seasons = range(start_season, 22)
-    for season in seasons:
-        fn = "{}-seasons/season_{:02d}.html".format(args.league, season)
-        if not os.path.isfile(fn):
-            break
-        print("{}...".format(season), end="", flush=True)
+    anchor_date = start_date
+    while anchor_date < len(overview_file_array):
+        fn = overview_file_array[anchor_date]
+        if fn is None:
+            anchor_date += 1
+            continue
+        print("{}...".format(anchor_date), end="", flush=True)
         with open(fn, "rb") as f:
             soup = BeautifulSoup(f, "lxml")
 
@@ -451,7 +459,7 @@ def parse_seasons(player_db, start_season, out_fname, existing_games):
                 while type(crosstable_name) is NavigableString or crosstable_name.name != "h3":
                     crosstable_name = crosstable_name.previous_sibling
                 crosstable_date = cycle_to_date(crosstable_name.contents[0])
-                date = total_num_cycles + season_cycles.index(crosstable_date)
+                date = anchor_date + season_cycles.index(crosstable_date)
 
                 # Construct the list of players, in order
                 crosstable_players = []
@@ -488,9 +496,7 @@ def parse_seasons(player_db, start_season, out_fname, existing_games):
                                 winner.add_game(game)
                                 loser.add_game(game)
                         row_player_idx += 1
-
-            # Add an extra month between seasons
-            total_num_cycles += len(season_cycles) + 1
+        anchor_date += 1
 
     with open(out_fname, "w") as out_file:
         for g in games:
@@ -693,6 +699,8 @@ if args.whr_vs_ayd:
     delta_cutoff = sorted(abs_deltas, reverse=True)[9]
     for (i, p) in enumerate(players):
         if abs_deltas[i] >= delta_cutoff or p == callout:
+            print("{} is {}, should be {} to {} ".format(p.handle, ayd_ratings[i], int(-deltas[i]),
+                                                         int(ayd_ratings[i] - deltas[i])))
             plt.scatter([whr_ranks[i]], [ayd_ratings[i]], s=4, c="orange")
             xytext = (-5,-2) if deltas[i] > 0 else (5,-2)
             horizontalalignment = "right" if deltas[i] > 0 else "left"

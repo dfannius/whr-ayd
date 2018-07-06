@@ -1,5 +1,8 @@
 import argparse
+from bs4 import BeautifulSoup
+from collections import namedtuple
 import os
+import re
 import sys
 import urllib.request
 
@@ -17,11 +20,37 @@ if not os.path.exists(dir):
 if args.season > 0:
     seasons = [args.season]
 else:
-    start_date = 1 if args.league == "eyd" else 8
-    seasons = range(start_date, 22)
+    start_season = 1 if args.league == "eyd" else 8
+    seasons = range(start_season, 100)
 
-for season in seasons:
-    season_url = "https://{}.yunguseng.com/season{}/overview.html".format(args.league, season)
-    season_file = "{}/season_{:02d}.html".format(dir, season)
-    print("{} -> {}".format(season_url, season_file))
-    urllib.request.urlretrieve(season_url, season_file)
+overview_re = re.compile(r"/season(\d+)/overview(.*).html")
+
+CycleUrl = namedtuple("CycleFile", ["date", "url"])
+
+archive_url = "https://{}.yunguseng.com/archive.html".format(args.league)
+cycle_urls = []
+with urllib.request.urlopen(archive_url) as response:
+    cur_season = 0
+    cur_cycle = 0
+    html = response.read()
+    soup = BeautifulSoup(html, "lxml")
+    for a in soup.find_all("a"):
+        if a.contents:
+            href = a.get("href")
+            if href:
+                match = re.match(overview_re, href)
+                if match and not "League" in str(a.contents[0]):
+                    season = int(match.group(1))
+                    if season != cur_season:
+                        cur_season = season
+                        cur_cycle = 0
+                    else:
+                        cur_cycle += 1
+                    if cur_season in seasons:
+                        cycle_urls.append(CycleUrl(cur_season * 4 + cur_cycle, href))
+
+for cycle_url in cycle_urls:
+    out_fn = "{}-overviews/{:03d}-overview.html".format(args.league, cycle_url.date)
+    in_fn = "https://{}.yunguseng.com{}".format(args.league, cycle_url.url)
+    print("{} -> {}".format(in_fn, out_fn))
+    urllib.request.urlretrieve(in_fn, out_fn)

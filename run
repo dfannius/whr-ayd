@@ -1,3 +1,5 @@
 #!/bin/bash
-python download-archive.py --season 21
-python whr.py --read-games --parse-seasons --parse-season-start 21 --load-ratings --analyze-games --print-report
+python download-archive.py --league ayd --season 21
+python download-archive.py --league eyd --season 21
+python whr.py --league ayd --read-games --parse-seasons --parse-season-start 21 --load-ratings --analyze-games --print-report
+python whr.py --league eyd --read-games --parse-seasons --parse-season-start 21 --load-ratings --analyze-games --print-report
