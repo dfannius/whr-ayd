@@ -1,3 +1,6 @@
+# TODO
+# - Combine AYD and EYD populations (there are 14 players in common)
+
 import argparse
 from bs4 import BeautifulSoup, NavigableString
 import csv
@@ -42,7 +45,7 @@ args = parser.parse_args()
 games_file = "{}-{}".format(args.league, args.games_file)
 ratings_file = "{}-{}".format(args.league, args.ratings_file)
 report_file = "{}-{}".format(args.league, args.report_file)
-start_season = 0
+first_season = 0                # No longer really used
 
 # "rank" roughly corresponds to AGA ratings.
 def rating_to_rank(raw_r):
@@ -67,9 +70,16 @@ def rank_to_rank_str(rank, integral=False):
 def rating_to_rank_str(raw_r):
     return rank_to_rank_str(rating_to_rank(raw_r))
 
+def r_to_gamma(r):
+    return math.exp(r)
+
+# A 'season' consists of three 'cycles' (each lasting one month) and
+# then an off month. 'dates' are in units of months. So the date goes
+# up by 4 with each new season.
+
 def date_to_season_cycle(d):
-    season = int(d/4) + start_season
-    cycle = d - (season-start_season) * 4
+    season = int(d/4) + first_season
+    cycle = d - (season-first_season) * 4
     return (season, cycle)
 
 def date_to_str(d):
@@ -77,29 +87,18 @@ def date_to_str(d):
     return "{}{}".format(season, "ABC"[cycle])
 
 def season_cycle_to_date(s, c):
-    return (s-start_season)*4 + c
-
-DEBUG = False
-def dprint(*args, **kwargs):
-    if DEBUG:
-        print(*args, **kwargs)
-
-def is_cycle_name(tag):
-    return (tag.name == "b" and tag.contents[0].startswith("AYD") or
-            tag.name == "h3" and "League" in tag.contents[0])
-
-def r_to_gamma(r):
-    return math.exp(r)
+    return (s - first_season)*4 + c
 
 class RatingDatum:
+    """The rating of a player at a particular date."""
     def __init__(self, date, ayd_rating, rating, std=0):
         self.date = date
         self.ayd_rating = ayd_rating
         self.rating = rating
         self.gamma = r_to_gamma(self.rating)
         self.std = std
-        self.wins = []
-        self.losses = []
+        self.wins = []          # Players defeated on this date
+        self.losses = []        # Players lost to on this date
 
     def set_std(self, std):
         self.std = std
@@ -278,12 +277,9 @@ class Player:
         g = np.zeros(num_points)
         for (i,r) in enumerate(self.rating_history):
             my_gamma = r.gamma
-            # dprint("my gamma {} -> {}".format(r.rating, my_gamma))
             g[i] += len(r.wins)                              # Bradley-Terry
             for j in r.wins + r.losses:
-                # dprint("{} @ {} gamma {} -> ".format(j, r.date, j.get_gamma_fast(r.date)), end="")
                 their_gamma = j.get_gamma_fast(r.date)
-                # dprint("{}".format(their_gamma))
                 factor = 1. / (my_gamma + their_gamma)
                 g[i] -= my_gamma * factor                    # Bradley-Terry
                 H[i,i] -= my_gamma * their_gamma * factor**2 # Bradley-Terry
@@ -291,7 +287,6 @@ class Player:
                 dr = r.rating - self.rating_history[i-1].rating
                 dt = r.date - self.rating_history[i-1].date
                 sigmasq_recip = 1./(dt * wsq)
-                # dprint("dr {} dt {} sigmasq_recip {}".format(dr, dt, sigmasq_recip))
                 g[i] -= dr * sigmasq_recip                   # Wiener
                 H[i,i] -= sigmasq_recip                      # Wiener
                 if i >= 1:
@@ -304,7 +299,6 @@ class Player:
     # Return magnitude of changes
     def iterate_whr(self):
         if self.root: return 0.0
-        # dprint("\niterate_whr {} {}".format(self.handle, self.rating_history))
 
         (H, g) = self.compute_derivatives()
         num_points = H.shape[0]
@@ -335,16 +329,6 @@ class Player:
             r.rating -= x[i]
             r.gamma = r_to_gamma(r.rating)
 
-        # dprint("g", g)
-        # dprint("H", H)
-        # dprint("d", d)
-        # dprint("b", b)
-        # dprint("a", a)
-        # dprint("x", x)
-        # # dprint("xn", xn)
-        # dprint("y", y)
-
-        # dprint("new ratings {} {}".format(self.handle, self.rating_history))
         return np.linalg.norm(x)
 
     # Return list of std deviation at each rating point
@@ -408,15 +392,20 @@ class PlayerDB:
 
 the_player_db = PlayerDB()
 
+def is_cycle_name(tag):
+    return (tag.name == "b" and tag.contents[0].startswith("AYD") or
+            tag.name == "h3" and "League" in tag.contents[0])
+
 # A full cycle name is something like "AYD League B, March 2014".
 # Get just the date part
 def cycle_to_date(s):
     return s.split(", ")[-1]
 
 def parse_seasons(player_db, start_season, out_fname, existing_games):
-    # There are three cycles (e.g., "January 2014", "February 2014", "March 2014") in a season (e.g., 8)
     start_date = season_cycle_to_date(start_season, 0)
 
+    # An overview file may contain all three cycles of a season (AYD,
+    # early EYD seasons) or a single cycle (late EYD seasons).
     overview_files = glob.glob("{}-overviews/*-overview.html".format(args.league))
     overview_file_array = []
     overview_file_re = re.compile(r"(\d+)-overview.html")
