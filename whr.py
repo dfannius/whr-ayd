@@ -116,11 +116,23 @@ class Player:
     def __repr__(self):
         return "{} ({})".format(self.name, self.handle)
 
+    def set_yd_rating(self, league, rating):
+        self.yd_ratings[league] = rating
+
     def set_ayd_rating(self, ayd_rating):
-        self.yd_ratings["ayd"] = ayd_rating
+        self.set_yd_rating("ayd", ayd_rating)
+        
+    def set_eyd_rating(self, eyd_rating):
+        self.set_yd_rating("eyd", eyd_rating)
+        
+    def get_yd_rating(self, league):
+        return self.yd_ratings.get(league, 0)
         
     def get_ayd_rating(self):
-        return self.yd_ratings.get("ayd", 0)
+        return self.get_yd_rating("ayd")
+
+    def get_eyd_rating(self):
+        return self.get_yd_rating("eyd")
 
     def include_in_graph(self):
         if self.root: return False
@@ -131,6 +143,7 @@ class Player:
     def write_rating_history(self, f):
         print('"{}","{}"'.format(self.name, self.handle), file=f, end="")
         print(',{}'.format(self.get_ayd_rating()), file=f, end="")
+        print(',{}'.format(self.get_eyd_rating()), file=f, end="")
         print(',{}'.format(len(self.rating_history)), file=f, end="")
         for r in self.rating_history:
             print(',{},{},{}'.format(r.date, r.rating, r.std), file=f, end="")
@@ -138,8 +151,9 @@ class Player:
 
     def read_rating_history(self, row):
         self.set_ayd_rating(int(row[0]))
+        self.set_eyd_rating(int(row[1]))
 
-        row = row[1:]
+        row = row[2:]
         num_points = int(row[0])
         appending = False
         rating_idx = 0
@@ -166,7 +180,7 @@ class Player:
             self.rating_hash[r.date] = r
 
     def copy_rating_history_from(self, other):
-        self.set_ayd_rating(other.get_ayd_rating())
+        self.yd_ratings = other.yd_ratings.copy()
         for r in self.rating_history:
             if r.date in other.rating_hash:
                 other_r = other.rating_hash[r.date]
@@ -450,9 +464,9 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games):
                     if len(tds) > 0:
                         name = tds[1].nobr.a.contents[0]
                         handle = tds[2].contents[0]
-                        ayd_rating = int(tds[11].contents[0])
+                        yd_rating = int(tds[11].contents[0])
                         player = player_db.get_player(name, handle)
-                        player.set_ayd_rating(ayd_rating)
+                        player.set_yd_rating(league, yd_rating)
                         crosstable_players.append(player)
 
                 # Parse game results
