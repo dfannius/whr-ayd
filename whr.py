@@ -1,6 +1,5 @@
 # TODO
 # - Combine AYD and EYD populations (there are 14 players in common)
-# - Distinguish ayd_rating and eyd_rating
 
 import argparse
 from bs4 import BeautifulSoup, NavigableString
@@ -108,7 +107,7 @@ class Player:
         self.name = name
         self.handle = handle
         self.games = []
-        self.ayd_rating = 0
+        self.yd_ratings = {}
         self.rating_history = []
         self.player_db = player_db
         self.root = is_root
@@ -118,10 +117,10 @@ class Player:
         return "{} ({})".format(self.name, self.handle)
 
     def set_ayd_rating(self, ayd_rating):
-        self.ayd_rating = ayd_rating
+        self.yd_ratings["ayd"] = ayd_rating
         
     def get_ayd_rating(self):
-        return self.ayd_rating
+        return self.yd_ratings.get("ayd", 0)
 
     def include_in_graph(self):
         if self.root: return False
@@ -131,14 +130,14 @@ class Player:
 
     def write_rating_history(self, f):
         print('"{}","{}"'.format(self.name, self.handle), file=f, end="")
-        print(',{}'.format(self.ayd_rating), file=f, end="")
+        print(',{}'.format(self.get_ayd_rating()), file=f, end="")
         print(',{}'.format(len(self.rating_history)), file=f, end="")
         for r in self.rating_history:
             print(',{},{},{}'.format(r.date, r.rating, r.std), file=f, end="")
         print(file=f)
 
     def read_rating_history(self, row):
-        self.ayd_rating = int(row[0])
+        self.set_ayd_rating(int(row[0]))
 
         row = row[1:]
         num_points = int(row[0])
@@ -167,7 +166,7 @@ class Player:
             self.rating_hash[r.date] = r
 
     def copy_rating_history_from(self, other):
-        self.ayd_rating = other.ayd_rating
+        self.set_ayd_rating(other.get_ayd_rating())
         for r in self.rating_history:
             if r.date in other.rating_hash:
                 other_r = other.rating_hash[r.date]
