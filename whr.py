@@ -1,5 +1,6 @@
 # TODO
 # - Combine AYD and EYD populations (there are 14 players in common)
+# - Distinguish ayd_rating and eyd_rating
 
 import argparse
 from bs4 import BeautifulSoup, NavigableString
@@ -42,9 +43,6 @@ parser.add_argument("--min-date", type=int, default=0, metavar="N",
 
 args = parser.parse_args()
 
-games_file = "{}-{}".format(args.league, args.games_file)
-ratings_file = "{}-{}".format(args.league, args.ratings_file)
-report_file = "{}-{}".format(args.league, args.report_file)
 first_season = 0                # No longer really used
 
 # "rank" roughly corresponds to AGA ratings.
@@ -91,9 +89,8 @@ def season_cycle_to_date(s, c):
 
 class RatingDatum:
     """The rating of a player at a particular date."""
-    def __init__(self, date, ayd_rating, rating, std=0):
+    def __init__(self, date, rating, std=0):
         self.date = date
-        self.ayd_rating = ayd_rating
         self.rating = rating
         self.gamma = r_to_gamma(self.rating)
         self.std = std
@@ -111,7 +108,7 @@ class Player:
         self.name = name
         self.handle = handle
         self.games = []
-        self.ayd_ratings = {}
+        self.ayd_rating = 0
         self.rating_history = []
         self.player_db = player_db
         self.root = is_root
@@ -120,11 +117,11 @@ class Player:
     def __repr__(self):
         return "{} ({})".format(self.name, self.handle)
 
-    def set_ayd_rating(self, date, ayd_rating):
-        self.ayd_ratings[date] = ayd_rating
-
-    def get_ayd_rating(self, date):
-        return self.ayd_ratings.get(date, 0)
+    def set_ayd_rating(self, ayd_rating):
+        self.ayd_rating = ayd_rating
+        
+    def get_ayd_rating(self):
+        return self.ayd_rating
 
     def include_in_graph(self):
         if self.root: return False
@@ -133,20 +130,24 @@ class Player:
         return True
 
     def write_rating_history(self, f):
-        print('"{}","{}",{}'.format(self.name, self.handle, len(self.rating_history)), file=f, end="")
+        print('"{}","{}"'.format(self.name, self.handle), file=f, end="")
+        print(',{}'.format(self.ayd_rating), file=f, end="")
+        print(',{}'.format(len(self.rating_history)), file=f, end="")
         for r in self.rating_history:
-            print(',{},{},{},{}'.format(r.date, r.ayd_rating, r.rating, r.std), file=f, end="")
+            print(',{},{},{}'.format(r.date, r.rating, r.std), file=f, end="")
         print(file=f)
 
     def read_rating_history(self, row):
+        self.ayd_rating = int(row[0])
+
+        row = row[1:]
         num_points = int(row[0])
         appending = False
         rating_idx = 0
         for i in range(num_points):
-            (date, ayd_rating, rating, std) = (int(row[4*i+1]),
-                                               int(row[4*i+2]),
-                                               float(row[4*i+3]),
-                                               float(row[4*i+4]))
+            (date, rating, std) = (int(row[3*i+1]),
+                                   float(row[3*i+2]),
+                                   float(row[3*i+3]))
             if not appending:
                 while (rating_idx < len(self.rating_history) and
                        self.rating_history[rating_idx].date != date):
@@ -155,18 +156,18 @@ class Player:
                     appending = True
                 else:
                     r = self.rating_history[rating_idx]
-                    r.ayd_rating = ayd_rating
                     r.rating = rating
                     r.gamma = r_to_gamma(rating)
                     r.std = std
 
             if appending:
-                self.rating_history.append(RatingDatum(date, ayd_rating, rating, std))
+                self.rating_history.append(RatingDatum(date, rating, std))
 
         for r in self.rating_history:
             self.rating_hash[r.date] = r
 
     def copy_rating_history_from(self, other):
+        self.ayd_rating = other.ayd_rating
         for r in self.rating_history:
             if r.date in other.rating_hash:
                 other_r = other.rating_hash[r.date]
@@ -185,12 +186,6 @@ class Player:
             return 0
         else:
             return self.rating_history[-1].rating
-
-    def latest_ayd_rating(self):
-        if len(self.rating_history) == 0:
-            return 0
-        else:
-            return self.rating_history[-1].ayd_rating
 
     def get_rating_fast(self, date):
         if self.root:
@@ -246,13 +241,13 @@ class Player:
         min_date = min((g.date for g in self.games), default=0)
         root_date = min_date - 100
         root_player = self.player_db.get_root_player()
-        self.add_game(Game(root_date, self, 0, root_player, 0))
-        self.add_game(Game(root_date, root_player, 0, self, 0))
+        self.add_game(Game(root_date, self, root_player))
+        self.add_game(Game(root_date, root_player, self))
         dates = list(set(g.date for g in self.games))
         dates.sort()
         self.games.sort(key=lambda g: g.date)
 
-        self.rating_history = [RatingDatum(d, self.get_ayd_rating(d), 0) for d in dates]
+        self.rating_history = [RatingDatum(d, 0) for d in dates]
         for r in self.rating_history:
             self.rating_hash[r.date] = r
         i = 0
@@ -341,12 +336,10 @@ class Player:
             r.set_std(math.sqrt(-Hinv[i,i]))
 
 class Game:
-    def __init__(self, date, winner, winner_ayd_rating, loser, loser_ayd_rating):
+    def __init__(self, date, winner, loser):
         self.date = date
         self.winner = winner
-        self.winner_ayd_rating = winner_ayd_rating
         self.loser = loser
-        self.loser_ayd_rating = loser_ayd_rating
 
     def __repr__(self):
         return "{:02}: {} > {}".format(self.date, self.winner, self.loser)
@@ -401,12 +394,12 @@ def is_cycle_name(tag):
 def cycle_to_date(s):
     return s.split(", ")[-1]
 
-def parse_seasons(player_db, start_season, out_fname, existing_games):
+def parse_seasons(player_db, league, start_season, out_fname, existing_games):
     start_date = season_cycle_to_date(start_season, 0)
 
     # An overview file may contain all three cycles of a season (AYD,
     # early EYD seasons) or a single cycle (late EYD seasons).
-    overview_files = glob.glob("{}-overviews/*-overview.html".format(args.league))
+    overview_files = glob.glob("{}-overviews/*-overview.html".format(league))
     overview_file_array = []
     overview_file_re = re.compile(r"(\d+)-overview.html")
     for fn in overview_files:
@@ -460,7 +453,7 @@ def parse_seasons(player_db, start_season, out_fname, existing_games):
                         handle = tds[2].contents[0]
                         ayd_rating = int(tds[11].contents[0])
                         player = player_db.get_player(name, handle)
-                        player.set_ayd_rating(date, ayd_rating)
+                        player.set_ayd_rating(ayd_rating)
                         crosstable_players.append(player)
 
                 # Parse game results
@@ -479,8 +472,7 @@ def parse_seasons(player_db, start_season, out_fname, existing_games):
                                     loser = crosstable_players[row_player_idx]
                                 else: # empty or forfeit
                                     continue
-                                game = Game(date, winner, winner.get_ayd_rating(date),
-                                            loser, loser.get_ayd_rating(date))
+                                game = Game(date, winner, loser)
                                 games.append(game)
                                 winner.add_game(game)
                                 loser.add_game(game)
@@ -489,35 +481,27 @@ def parse_seasons(player_db, start_season, out_fname, existing_games):
 
     with open(out_fname, "w") as out_file:
         for g in games:
-            print('{},"{}","{}",{},"{}","{}",{}'.format(g.date,
-                                                        g.winner.name,
-                                                        g.winner.handle,
-                                                        g.winner_ayd_rating,
-                                                        g.loser.name,
-                                                        g.loser.handle,
-                                                        g.loser_ayd_rating),
+            print('{},"{}","{}","{}","{}"'.format(g.date,
+                                                  g.winner.name,
+                                                  g.winner.handle,
+                                                  g.loser.name,
+                                                  g.loser.handle),
                   file=out_file)
 
-# As produced by analyze_seasons()
+# Read in the games file that was produced by analyze_seasons()
 def read_games_file(player_db, fname):
-    player_db.clear()
     games = []
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            (date, winner_name, winner_handle, winner_ayd_rating,
-             loser_name, loser_handle, loser_ayd_rating) = row
+            (date, winner_name, winner_handle, loser_name, loser_handle) = row
             date = int(date)
-            winner_ayd_rating = int(winner_ayd_rating)
-            loser_ayd_rating = int(loser_ayd_rating)
             winner = player_db.get_player(winner_name, winner_handle)
             loser = player_db.get_player(loser_name, loser_handle)
-            game = Game(date, winner, winner_ayd_rating, loser, loser_ayd_rating)
+            game = Game(date, winner, loser)
             games.append(game)
             winner.add_game(game)
             loser.add_game(game)
-            winner.set_ayd_rating(date, winner_ayd_rating)
-            loser.set_ayd_rating(date, loser_ayd_rating)
     return games
 
 def init_whr(player_db):
@@ -539,7 +523,8 @@ def run_whr(player_db):
         avg_change = change / len(player_db) # maybe should be avg change per rating point?
         # print("avg change", avg_change)
         if avg_change < 0.001:
-            print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""), end="", flush=True)
+            print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""),
+                  end="", flush=True)
             break
     for p in player_db.values():
         p.compute_stds()
@@ -567,15 +552,21 @@ def load_rating_history(player_db, fname):
             p = player_db.get_player(name, handle)
             p.read_rating_history(row[2:])
 
+games_file = "{}-{}".format(args.league, args.games_file)
+ratings_file = "{}-{}".format(args.league, args.ratings_file)
+report_file = "{}-{}".format(args.league, args.report_file)
+
 if args.parse_seasons:
     games = []
     if args.read_games:
+        the_player_db.clear()
         print("Reading games file...", end="", flush=True) 
         games = read_games_file(the_player_db, games_file)
     print("Parsing seasons...", end="", flush=True) 
-    parse_seasons(the_player_db, args.parse_season_start, games_file, games)
+    parse_seasons(the_player_db, args.league, args.parse_season_start, games_file, games)
 else:
     print("Reading games file...", end="", flush=True) 
+    the_player_db.clear()
     read_games_file(the_player_db, games_file)
 init_whr(the_player_db)
 
@@ -668,7 +659,7 @@ if args.whr_vs_ayd:
     players = [p for p in the_player_db.values() if p.include_in_graph()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
-    ayd_ratings = [p.latest_ayd_rating() for p in players]
+    ayd_ratings = [p.get_ayd_rating() for p in players]
 
     W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
     (lsq, resid, rank, sing) = np.linalg.lstsq(W, ayd_ratings)
@@ -679,7 +670,7 @@ if args.whr_vs_ayd:
     plt.xticks(tick_vals, new_tick_labels)
 
     callout = None              # player to highlight
-    if callout: plt.scatter([rating_to_rank(callout.latest_rating())], [callout.latest_ayd_rating()])
+    if callout: plt.scatter([rating_to_rank(callout.latest_rating())], [callout.get_ayd_rating()])
 
     # plt.plot(whr_ranks, [lsq[0] * r + lsq[1] for r in whr_ranks])
     # Maybe we should divide by std
@@ -688,8 +679,8 @@ if args.whr_vs_ayd:
     delta_cutoff = sorted(abs_deltas, reverse=True)[9]
     for (i, p) in enumerate(players):
         if abs_deltas[i] >= delta_cutoff or p == callout:
-            print("{} is {}, should be {} to {} ".format(p.handle, ayd_ratings[i], int(-deltas[i]),
-                                                         int(ayd_ratings[i] - deltas[i])))
+            # print("{} is {}, should be {} to {} ".format(p.handle, ayd_ratings[i], int(-deltas[i]),
+            #                                             int(ayd_ratings[i] - deltas[i])))
             plt.scatter([whr_ranks[i]], [ayd_ratings[i]], s=4, c="orange")
             xytext = (-5,-2) if deltas[i] > 0 else (5,-2)
             horizontalalignment = "right" if deltas[i] > 0 else "left"
