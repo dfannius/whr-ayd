@@ -33,8 +33,8 @@ parser.add_argument("--load-ratings", action="store_true", default=False,
                     help="Load data from ratings file")
 parser.add_argument("--draw-graph", type=str, default=None, metavar="H",
                     help="Handle of user's graph to draw")
-parser.add_argument("--whr-vs-ayd", action="store_true", default=False,
-                    help="Draw scatterplot of WHR vs AYD ratings")
+parser.add_argument("--whr-vs-yd", action="store_true", default=False,
+                    help="Draw scatterplot of WHR vs YD ratings")
 parser.add_argument("--league", type=str, default="ayd", metavar="S",
                     help="League (ayd or eyd)")
 parser.add_argument("--min-date", type=int, default=0, metavar="N",
@@ -583,7 +583,7 @@ else:
     read_games_file(the_player_db, games_file)
 init_whr(the_player_db)
 
-need_ratings = args.print_report or args.draw_graph or args.whr_vs_ayd
+need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd
 if args.load_ratings or (need_ratings and not args.analyze_games):
     old_player_db = PlayerDB()
     load_rating_history(old_player_db, ratings_file)
@@ -668,16 +668,16 @@ if args.draw_graph:
     plt.savefig("{}/{}.png".format(plot_dir, handle))
     plt.show()
 
-if args.whr_vs_ayd:
+if args.whr_vs_yd:
     players = [p for p in the_player_db.values() if p.include_in_graph()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
-    ayd_ratings = [p.get_ayd_rating() for p in players]
+    yd_ratings = [p.get_yd_rating(args.league) for p in players]
 
     W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
-    (lsq, resid, rank, sing) = np.linalg.lstsq(W, ayd_ratings)
+    (lsq, resid, rank, sing) = np.linalg.lstsq(W, yd_ratings)
 
-    plt.scatter(whr_ranks, ayd_ratings, s=4)
+    plt.scatter(whr_ranks, yd_ratings, s=4)
     (tick_vals, tick_labels) = plt.xticks()
     new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
     plt.xticks(tick_vals, new_tick_labels)
@@ -687,24 +687,24 @@ if args.whr_vs_ayd:
 
     # plt.plot(whr_ranks, [lsq[0] * r + lsq[1] for r in whr_ranks])
     # Maybe we should divide by std
-    deltas = [(ayd_ratings[i] - (lsq[0] * whr_ranks[i] + lsq[1])) for i in range(len(players))]
+    deltas = [(yd_ratings[i] - (lsq[0] * whr_ranks[i] + lsq[1])) for i in range(len(players))]
     abs_deltas = [abs(d) for d in deltas]
     delta_cutoff = sorted(abs_deltas, reverse=True)[9]
     for (i, p) in enumerate(players):
         if abs_deltas[i] >= delta_cutoff or p == callout:
-            # print("{} is {}, should be {} to {} ".format(p.handle, ayd_ratings[i], int(-deltas[i]),
-            #                                             int(ayd_ratings[i] - deltas[i])))
-            plt.scatter([whr_ranks[i]], [ayd_ratings[i]], s=4, c="orange")
+            # print("{} is {}, should be {} to {} ".format(p.handle, yd_ratings[i], int(-deltas[i]),
+            #                                             int(yd_ratings[i] - deltas[i])))
+            plt.scatter([whr_ranks[i]], [yd_ratings[i]], s=4, c="orange")
             xytext = (-5,-2) if deltas[i] > 0 else (5,-2)
             horizontalalignment = "right" if deltas[i] > 0 else "left"
             plt.annotate(p.handle,
-                         (whr_ranks[i], ayd_ratings[i]),
+                         (whr_ranks[i], yd_ratings[i]),
                          xytext=xytext,
                          horizontalalignment=horizontalalignment,
                          textcoords="offset points")
 
     plt.xlabel("WHR rating")
-    plt.ylabel("AYD rating")
+    plt.ylabel("YD rating")
     plt.show()
 
 print("Done.")
