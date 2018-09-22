@@ -37,10 +37,14 @@ parser.add_argument("--whr-vs-yd", action="store_true", default=False,
                     help="Draw scatterplot of WHR vs YD ratings")
 parser.add_argument("--league", type=str, default="ayd", metavar="S",
                     help="League (ayd or eyd)")
+parser.add_argument("--leagues", type=str, default="", metavar="S",
+                    help="Leagues")
 parser.add_argument("--min-date", type=int, default=0, metavar="N",
                     help="Mininum active date for players in graph")
 
 args = parser.parse_args()
+if len(args.leagues) == 0:
+    args.leagues = args.league
 
 first_season = 0                # No longer really used
 
@@ -53,9 +57,11 @@ def rating_to_rank(raw_r):
 
 def rank_to_rank_str(rank, integral=False):
     if integral and int(rank) == rank:
+        rank = int(rank)
+        if rank == 1:
+            return "1d/1k"
         dan_fmt = "{}d"
         kyu_fmt = "{}k"
-        rank = int(rank)
     else:
         dan_fmt = "{:.2f}d"
         kyu_fmt = "{:.2f}k"
@@ -407,6 +413,12 @@ def is_cycle_name(tag):
 def cycle_to_date(s):
     return s.split(", ")[-1]
 
+def flush_old_games(player_db, start_season, old_games):
+    start_date = season_cycle_to_date(start_season, 0)
+    player_db.remove_recent_games(start_date)
+    games = [g for g in old_games if g.date < start_date]
+    return games
+
 def parse_seasons(player_db, league, start_season, out_fname, existing_games):
     start_date = season_cycle_to_date(start_season, 0)
 
@@ -423,8 +435,9 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games):
                 overview_file_array.append(None)
             overview_file_array[date] = fn
 
-    player_db.remove_recent_games(start_date)
-    games = [g for g in existing_games if g.date < start_date]
+    # player_db.remove_recent_games(start_date)
+    # games = [g for g in existing_games if g.date < start_date]
+    # games = existing_games
 
     anchor_date = start_date
     while anchor_date < len(overview_file_array):
@@ -502,8 +515,7 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games):
                   file=out_file)
 
 # Read in the games file that was produced by analyze_seasons()
-def read_games_file(player_db, fname):
-    games = []
+def read_games_file(player_db, fname, games):
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
@@ -565,22 +577,39 @@ def load_rating_history(player_db, fname):
             p = player_db.get_player(name, handle)
             p.read_rating_history(row[2:])
 
-games_file = "{}-{}".format(args.league, args.games_file)
+def league_games_file(league):
+    return "{}-{}".format(league, args.games_file)
+
 ratings_file = "{}-{}".format(args.league, args.ratings_file)
 report_file = "{}-{}".format(args.league, args.report_file)
+
+leagues = args.leagues.split(",")
 
 if args.parse_seasons:
     games = []
     if args.read_games:
         the_player_db.clear()
         print("Reading games file...", end="", flush=True) 
-        games = read_games_file(the_player_db, games_file)
+        games = []
+        for league in leagues:
+            print("{}...".format(league), end="")
+            games = read_games_file(the_player_db, league_games_file(league), games)
     print("Parsing seasons...", end="", flush=True) 
-    parse_seasons(the_player_db, args.league, args.parse_season_start, games_file, games)
+    for league in leagues:
+        print("{}...".format(league), end="")
+        games = flush_old_games(the_player_db, args.parse_season_start, games)
+        parse_seasons(the_player_db,
+                      league,
+                      args.parse_season_start,
+                      league_games_file(league),
+                      games)
 else:
     print("Reading games file...", end="", flush=True) 
     the_player_db.clear()
-    read_games_file(the_player_db, games_file)
+    games = []
+    for league in leagues:
+        print("{}...".format(league), end="")
+        games = read_games_file(the_player_db, league_games_file(league), games)
 init_whr(the_player_db)
 
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd
