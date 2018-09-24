@@ -13,7 +13,7 @@ parser.add_argument("--season", type=int, default="0", metavar="N",
                     help="Single season to download")
 args = parser.parse_args()
 
-dir = "{}-seasons".format(args.league)
+dir = "{}-overviews".format(args.league)
 if not os.path.exists(dir):
     os.mkdir(dir)
 
@@ -50,7 +50,7 @@ with urllib.request.urlopen(archive_url) as response:
                         cycle_urls.append(CycleUrl(cur_season * 4 + cur_cycle, href))
 
 for cycle_url in cycle_urls:
-    out_fn = "{}-overviews/{:03d}-overview.html".format(args.league, cycle_url.date)
+    out_fn = "{}/{:03d}-overview.html".format(dir, cycle_url.date)
     in_fn = "https://{}.yunguseng.com{}".format(args.league, cycle_url.url)
     print("{} -> {}".format(in_fn, out_fn))
     urllib.request.urlretrieve(in_fn, out_fn)

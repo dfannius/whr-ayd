@@ -1,5 +1,6 @@
 # TODO
-# - Combine AYD and EYD populations (there are 14 players in common)
+# - whr_vs_yd stopped working
+# - show rating changes for players with new games
 
 import argparse
 from bs4 import BeautifulSoup, NavigableString
@@ -41,6 +42,8 @@ parser.add_argument("--leagues", type=str, default="", metavar="S",
                     help="Leagues")
 parser.add_argument("--min-date", type=int, default=0, metavar="N",
                     help="Mininum active date for players in graph")
+parser.add_argument("--note-new-games", action="store_true", default=False,
+                    help="Print the results of newly parsed games")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
@@ -143,6 +146,7 @@ class Player:
     def include_in_graph(self):
         if self.root: return False
         if len(self.rating_history) <= 1: return False
+        if len(self.get_wins()) == 0 or len(self.get_losses()) == 0: return False
         if self.handle == "Chimin": return False
         return True
 
@@ -152,7 +156,7 @@ class Player:
         print(',{}'.format(self.get_eyd_rating()), file=f, end="")
         print(',{}'.format(len(self.rating_history)), file=f, end="")
         for r in self.rating_history:
-            print(',{},{},{}'.format(r.date, r.rating, r.std), file=f, end="")
+            print(',{},{:.4f},{:.4f}'.format(r.date, r.rating, r.std), file=f, end="")
         print(file=f)
 
     def read_rating_history(self, row):
@@ -205,6 +209,12 @@ class Player:
             return 0
         else:
             return self.rating_history[-1].rating
+
+    def latest_std(self):
+        if len(self.rating_history) == 0:
+            return 0
+        else:
+            return self.rating_history[-1].std
 
     def get_rating_fast(self, date):
         if self.root:
@@ -360,6 +370,9 @@ class Game:
         self.winner = winner
         self.loser = loser
 
+    def __eq__(self, other):
+        return self.date == other.date and self.winner == other.winner and self.loser == other.loser
+
     def __repr__(self):
         return "{:02}: {} > {}".format(self.date, self.winner, self.loser)
 
@@ -417,9 +430,10 @@ def flush_old_games(player_db, start_season, old_games):
     start_date = season_cycle_to_date(start_season, 0)
     player_db.remove_recent_games(start_date)
     games = [g for g in old_games if g.date < start_date]
-    return games
+    flushed_games = [g for g in old_games if g.date >= start_date]
+    return games, flushed_games
 
-def parse_seasons(player_db, league, start_season, out_fname, existing_games):
+def parse_seasons(player_db, league, start_season, out_fname, existing_games, flushed_games):
     start_date = season_cycle_to_date(start_season, 0)
 
     # An overview file may contain all three cycles of a season (AYD,
@@ -437,7 +451,8 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games):
 
     # player_db.remove_recent_games(start_date)
     # games = [g for g in existing_games if g.date < start_date]
-    # games = existing_games
+    games = existing_games
+    new_games = []
 
     anchor_date = start_date
     while anchor_date < len(overview_file_array):
@@ -499,6 +514,8 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games):
                                 else: # empty or forfeit
                                     continue
                                 game = Game(date, winner, loser)
+                                if game.date >= start_date and game not in flushed_games:
+                                    new_games.append(game)
                                 games.append(game)
                                 winner.add_game(game)
                                 loser.add_game(game)
@@ -513,6 +530,11 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games):
                                                   g.loser.name,
                                                   g.loser.handle),
                   file=out_file)
+
+    if new_games and args.note_new_games:
+        print("\nNew games:")
+        for g in new_games:
+            print("  {} > {}".format(g.winner.handle, g.loser.handle))
 
 # Read in the games file that was produced by analyze_seasons()
 def read_games_file(player_db, fname, games):
@@ -597,12 +619,13 @@ if args.parse_seasons:
     print("Parsing seasons...", end="", flush=True) 
     for league in leagues:
         print("{}...".format(league), end="")
-        games = flush_old_games(the_player_db, args.parse_season_start, games)
+        games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
         parse_seasons(the_player_db,
                       league,
                       args.parse_season_start,
                       league_games_file(league),
-                      games)
+                      games,
+                      flushed_games)
 else:
     print("Reading games file...", end="", flush=True) 
     the_player_db.clear()
@@ -714,11 +737,15 @@ if args.whr_vs_yd:
     callout = None              # player to highlight
     if callout: plt.scatter([rating_to_rank(callout.latest_rating())], [callout.get_ayd_rating()])
 
-    # plt.plot(whr_ranks, [lsq[0] * r + lsq[1] for r in whr_ranks])
+    plt.plot(whr_ranks,
+             [lsq[0] * r + lsq[1] for r in whr_ranks],
+             linewidth=0.2)
     # Maybe we should divide by std
     deltas = [(yd_ratings[i] - (lsq[0] * whr_ranks[i] + lsq[1])) for i in range(len(players))]
     abs_deltas = [abs(d) for d in deltas]
+    # devs = [abs_deltas[i] / players[i].latest_std() for i in range(len(players))]
     delta_cutoff = sorted(abs_deltas, reverse=True)[9]
+    # dev_cutoff = sorted(devs, reverse=True)[9]
     for (i, p) in enumerate(players):
         if abs_deltas[i] >= delta_cutoff or p == callout:
             # print("{} is {}, should be {} to {} ".format(p.handle, yd_ratings[i], int(-deltas[i]),
