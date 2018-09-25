@@ -1,5 +1,6 @@
+from typing import List, Optional, Tuple
+
 # TODO
-# - whr_vs_yd stopped working
 # - show rating changes for players with new games
 
 import argparse
@@ -97,15 +98,15 @@ def season_cycle_to_date(s, c):
 
 class RatingDatum:
     """The rating of a player at a particular date."""
-    def __init__(self, date, rating, std=0):
-        self.date = date
-        self.rating = rating
-        self.gamma = r_to_gamma(self.rating)
-        self.std = std
-        self.wins = []          # Players defeated on this date
-        self.losses = []        # Players lost to on this date
+    def __init__(self, date: int, rating: float, std: float=0) -> None:
+        self.date: int = date
+        self.rating: float = rating
+        self.gamma: float = r_to_gamma(self.rating)
+        self.std: float = std
+        self.wins: List[Player] = []          # Players defeated on this date
+        self.losses: List[Player] = []        # Players lost to on this date
 
-    def set_std(self, std):
+    def set_std(self, std: float):
         self.std = std
 
     def __repr__(self):
@@ -113,10 +114,10 @@ class RatingDatum:
 
 class Player:
     def __init__(self, name, handle, player_db, is_root=False):
-        self.name = name
-        self.handle = handle
-        self.games = []
-        self.yd_ratings = {}
+        self.name: str = name
+        self.handle: str = handle
+        self.games: List[Game] = []
+        self.yd_ratings: Mapping[int, RatingDatum] = {}
         self.rating_history = []
         self.player_db = player_db
         self.root = is_root
@@ -125,25 +126,25 @@ class Player:
     def __repr__(self):
         return "{} ({})".format(self.name, self.handle)
 
-    def set_yd_rating(self, league, rating):
+    def set_yd_rating(self, league: str, rating: float):
         self.yd_ratings[league] = rating
 
-    def set_ayd_rating(self, ayd_rating):
+    def set_ayd_rating(self, ayd_rating: float):
         self.set_yd_rating("ayd", ayd_rating)
         
-    def set_eyd_rating(self, eyd_rating):
+    def set_eyd_rating(self, eyd_rating: float):
         self.set_yd_rating("eyd", eyd_rating)
         
-    def get_yd_rating(self, league):
+    def get_yd_rating(self, league: str) -> float:
         return self.yd_ratings.get(league, 0)
         
-    def get_ayd_rating(self):
+    def get_ayd_rating(self) -> float:
         return self.get_yd_rating("ayd")
 
-    def get_eyd_rating(self):
+    def get_eyd_rating(self) -> float:
         return self.get_yd_rating("eyd")
 
-    def include_in_graph(self):
+    def include_in_graph(self) -> bool:
         if self.root: return False
         if len(self.rating_history) <= 1: return False
         if len(self.get_wins()) == 0 or len(self.get_losses()) == 0: return False
@@ -159,7 +160,8 @@ class Player:
             print(',{},{:.4f},{:.4f}'.format(r.date, r.rating, r.std), file=f, end="")
         print(file=f)
 
-    def read_rating_history(self, row):
+    # Takes a CSV row, already split
+    def read_rating_history(self, row: List[str]):
         self.set_ayd_rating(int(row[0]))
         self.set_eyd_rating(int(row[1]))
 
@@ -189,7 +191,7 @@ class Player:
         for r in self.rating_history:
             self.rating_hash[r.date] = r
 
-    def copy_rating_history_from(self, other):
+    def copy_rating_history_from(self, other: "Player"):
         self.yd_ratings = other.yd_ratings.copy()
         for r in self.rating_history:
             if r.date in other.rating_hash:
@@ -198,37 +200,37 @@ class Player:
                 r.gamma = other_r.gamma
                 r.std = other_r.std
 
-    def add_game(self, game):
+    def add_game(self, game: "Game"):
         self.games.append(game)
 
-    def remove_recent_games(self, start_date):
+    def remove_recent_games(self, start_date: int):
         self.games = [g for g in self.games if g.date < start_date]
 
-    def latest_rating(self):
+    def latest_rating(self) -> float:
         if len(self.rating_history) == 0:
             return 0
         else:
             return self.rating_history[-1].rating
 
-    def latest_std(self):
+    def latest_std(self) -> float:
         if len(self.rating_history) == 0:
             return 0
         else:
             return self.rating_history[-1].std
 
-    def get_rating_fast(self, date):
+    def get_rating_fast(self, date) -> float:
         if self.root:
             return 0
         else:
             return self.rating_hash[date].rating
 
-    def get_gamma_fast(self, date):
+    def get_gamma_fast(self, date) -> float:
         if self.root:
             return 1
         else:
             return self.rating_hash[date].gamma
 
-    def get_wins(self):
+    def get_wins(self) -> List[Tuple[int, float]]:
         results = []
         for r in self.rating_history:
             for w in r.wins:
@@ -236,7 +238,7 @@ class Player:
                     results.append((r.date, w.get_rating(r.date)))
         return results
 
-    def get_losses(self):
+    def get_losses(self) -> List[Tuple[int, float]]:
         results = []
         for r in self.rating_history:
             for l in r.losses:
@@ -244,7 +246,7 @@ class Player:
                     results.append((r.date, l.get_rating(r.date)))
         return results
 
-    def get_rating(self, date):
+    def get_rating(self, date: int) -> float:
         if self.root:
             return 0
         if len(self.rating_history) == 0:
@@ -365,23 +367,25 @@ class Player:
             r.set_std(math.sqrt(-Hinv[i,i]))
 
 class Game:
-    def __init__(self, date, winner, loser):
-        self.date = date
-        self.winner = winner
-        self.loser = loser
+    def __init__(self, date: int, winner: Player, loser: Player) -> None:
+        self.date: int = date
+        self.winner: Player = winner
+        self.loser: Player = loser
 
     def __eq__(self, other):
-        return self.date == other.date and self.winner == other.winner and self.loser == other.loser
+        return (self.date == other.date and
+                self.winner == other.winner and
+                self.loser == other.loser)
 
     def __repr__(self):
         return "{:02}: {} > {}".format(self.date, self.winner, self.loser)
 
 class PlayerDB:
     def __init__(self):
-        self.player_map = {}
-        self.root_player = self.get_player("[root]", "[root]", is_root=True)
+        self.player_map: Mapping[str, Player] = {}
+        self.root_player: Player = self.get_player("[root]", "[root]", is_root=True)
 
-    def get_player(self, name, handle, is_root=False):
+    def get_player(self, name: str, handle: str, is_root=False) -> Player:
         if handle in self.player_map:
             player = self.player_map[handle]
             assert(player.name == name)
@@ -391,28 +395,28 @@ class PlayerDB:
             self.player_map[handle] = player
             return player
 
-    def get_root_player(self):
+    def get_root_player(self) -> Player:
         return self.root_player
 
-    def copy_rating_history_from(self, other_db):
+    def copy_rating_history_from(self, other_db: "PlayerDB"):
         for (handle, player) in self.player_map.items():
             if handle in other_db.player_map:
                 player.copy_rating_history_from(other_db.player_map[handle])
 
-    def remove_recent_games(self, start_date):
+    def remove_recent_games(self, start_date: int):
         for p in self.player_map.values():
             p.remove_recent_games(start_date)
 
-    def __getitem__(self, handle):
+    def __getitem__(self, handle: str) -> Player:
         return self.player_map[handle]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.player_map)
 
     def clear(self):
         self.player_map.clear()
 
-    def values(self):
+    def values(self) -> List[Player]:
         return self.player_map.values()
 
 the_player_db = PlayerDB()
@@ -423,23 +427,28 @@ def is_cycle_name(tag):
 
 # A full cycle name is something like "AYD League B, March 2014".
 # Get just the date part
-def cycle_to_date(s):
+def cycle_to_date(s: str) -> str:
     return s.split(", ")[-1]
 
-def flush_old_games(player_db, start_season, old_games):
+def flush_old_games(player_db: PlayerDB, start_season: int, old_games: List[Game]):
     start_date = season_cycle_to_date(start_season, 0)
     player_db.remove_recent_games(start_date)
     games = [g for g in old_games if g.date < start_date]
     flushed_games = [g for g in old_games if g.date >= start_date]
     return games, flushed_games
 
-def parse_seasons(player_db, league, start_season, out_fname, existing_games, flushed_games):
+def parse_seasons(player_db: PlayerDB,
+                  league: str,
+                  start_season: int,
+                  out_fname: str,
+                  existing_games: List[Game] ,
+                  flushed_games: List[Game]):
     start_date = season_cycle_to_date(start_season, 0)
 
     # An overview file may contain all three cycles of a season (AYD,
     # early EYD seasons) or a single cycle (late EYD seasons).
     overview_files = glob.glob("{}-overviews/*-overview.html".format(league))
-    overview_file_array = []
+    overview_file_array: List[Optional[str]] = []
     overview_file_re = re.compile(r"(\d+)-overview.html")
     for fn in overview_files:
         match = re.search(overview_file_re, fn)
@@ -452,7 +461,7 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games, fl
     # player_db.remove_recent_games(start_date)
     # games = [g for g in existing_games if g.date < start_date]
     games = existing_games
-    new_games = []
+    new_games: List[Game] = []
 
     anchor_date = start_date
     while anchor_date < len(overview_file_array):
@@ -465,13 +474,13 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games, fl
             soup = BeautifulSoup(f, "lxml")
 
             # First find the names of the cycles
-            season_cycles = [] # Names of cycles within this season, in chronological order
+            season_cycles: List[str] = [] # Names of cycles in this season, in chronological order
 
             cycle_tags = soup.find_all(is_cycle_name)
             for cycle_tag in cycle_tags:
-                date = cycle_to_date(cycle_tag.contents[0])
+                date_name = cycle_to_date(cycle_tag.contents[0])
                 if date not in season_cycles:
-                    season_cycles.append(date)
+                    season_cycles.append(date_name)
             season_cycles.reverse()
 
             # Now find the crosstables
@@ -537,12 +546,13 @@ def parse_seasons(player_db, league, start_season, out_fname, existing_games, fl
             print("  {} > {}".format(g.winner.handle, g.loser.handle))
 
 # Read in the games file that was produced by analyze_seasons()
-def read_games_file(player_db, fname, games):
+# and append it to `games`
+def read_games_file(player_db: PlayerDB, fname: str, games: List[Game]) -> List[Game]:
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            (date, winner_name, winner_handle, loser_name, loser_handle) = row
-            date = int(date)
+            (date_str, winner_name, winner_handle, loser_name, loser_handle) = row
+            date = int(date_str)
             winner = player_db.get_player(winner_name, winner_handle)
             loser = player_db.get_player(loser_name, loser_handle)
             game = Game(date, winner, loser)
@@ -551,21 +561,21 @@ def read_games_file(player_db, fname, games):
             loser.add_game(game)
     return games
 
-def init_whr(player_db):
+def init_whr(player_db: PlayerDB):
     for p in player_db.values():
         p.init_rating_history()
 
-def iterate_whr(player_db):
+def iterate_whr(player_db: PlayerDB):
     sum_xsq = 0
     for p in player_db.values():
         sum_xsq += p.iterate_whr() * 2
     return math.sqrt(sum_xsq)
 
-def run_whr(player_db):
+def run_whr(player_db: PlayerDB):
     for i in range(1000):
         if (i+1) % 100 == 0:
             print("{}...".format(i+1), end="", flush=True)
-        # print("ITERATION {}".format(i))
+            # print("ITERATION {}".format(i))
         change = iterate_whr(player_db)
         avg_change = change / len(player_db) # maybe should be avg change per rating point?
         # print("avg change", avg_change)
@@ -576,7 +586,7 @@ def run_whr(player_db):
     for p in player_db.values():
         p.compute_stds()
 
-def print_report(player_db, fname):
+def print_report(player_db: PlayerDB, fname: str):
     with open(fname, "w") as f:
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
             if len(p.rating_history) > 0:
@@ -586,12 +596,12 @@ def print_report(player_db, fname):
                                                          p.rating_history[1:]),
                       file=f)
 
-def save_rating_history(player_db, fname):
+def save_rating_history(player_db: PlayerDB, fname: str):
     with open(fname, "w") as f:
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
               p.write_rating_history(f)
 
-def load_rating_history(player_db, fname):
+def load_rating_history(player_db: PlayerDB, fname: str):
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
@@ -599,7 +609,7 @@ def load_rating_history(player_db, fname):
             p = player_db.get_player(name, handle)
             p.read_rating_history(row[2:])
 
-def league_games_file(league):
+def league_games_file(league: str):
     return "{}-{}".format(league, args.games_file)
 
 ratings_file = "{}-{}".format(args.league, args.ratings_file)
@@ -608,7 +618,7 @@ report_file = "{}-{}".format(args.league, args.report_file)
 leagues = args.leagues.split(",")
 
 if args.parse_seasons:
-    games = []
+    games: List[Game] = []
     if args.read_games:
         the_player_db.clear()
         print("Reading games file...", end="", flush=True) 
@@ -652,7 +662,7 @@ if args.print_report:
 
 plt.style.use("seaborn-darkgrid")
 
-def date_str_ticks(dates):
+def date_str_ticks(dates: List[int]):
     # Put a label just on the middle cycle of each season, unless the player didn't play that one.
     tick_labels = ["" for d in dates]
     seasons_seen = set()
