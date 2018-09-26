@@ -479,7 +479,7 @@ def parse_seasons(player_db: PlayerDB,
             cycle_tags = soup.find_all(is_cycle_name)
             for cycle_tag in cycle_tags:
                 date_name = cycle_to_date(cycle_tag.contents[0])
-                if date not in season_cycles:
+                if date_name not in season_cycles:
                     season_cycles.append(date_name)
             season_cycles.reverse()
 
