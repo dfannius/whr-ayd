@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup, NavigableString
 import csv
 import glob
 import math
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -743,16 +744,21 @@ if args.whr_vs_yd:
     W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
     (lsq, resid, rank, sing) = np.linalg.lstsq(W, yd_ratings, rcond=None)
 
-    plt.scatter(whr_ranks, yd_ratings, s=4)
-    plt.errorbar(whr_ranks, yd_ratings, xerr=whr_stds, fmt="none", linewidth=0.2)
-    (tick_vals, tick_labels) = plt.xticks()
-    new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
-    plt.xticks(tick_vals, new_tick_labels)
+    fig, ax = plt.subplots()
+    ax.scatter(whr_ranks, yd_ratings, s=4)
+    ax.errorbar(whr_ranks, yd_ratings, xerr=whr_stds, fmt="none", linewidth=0.2)
+    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=1))
+    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=100))
+    tick_vals = ax.get_xticks()
+    tick_labels = ax.get_xticklabels()
+    new_tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
+    ax.set_xticks(tick_vals)
+    ax.set_xticklabels(new_tick_labels)
 
     callout = None              # player to highlight
-    if callout: plt.scatter([rating_to_rank(callout.latest_rating())], [callout.get_ayd_rating()])
+    if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_ayd_rating()])
 
-    plt.plot(whr_ranks,
+    ax.plot(whr_ranks,
              [lsq[0] * r + lsq[1] for r in whr_ranks],
              linewidth=0.2)
     # Maybe we should divide by std
@@ -766,17 +772,17 @@ if args.whr_vs_yd:
         if abs_devs[i] >= dev_cutoff or p == callout:
             # print("{} is {}, should be {} to {} ".format(p.handle, yd_ratings[i], int(-deltas[i]),
             #                                             int(yd_ratings[i] - deltas[i])))
-            plt.scatter([whr_ranks[i]], [yd_ratings[i]], s=4, c="orange")
+            ax.scatter([whr_ranks[i]], [yd_ratings[i]], s=4, c="orange")
             xytext = (-5,-5) if deltas[i] > 0 else (5,-5)
             horizontalalignment = "right" if deltas[i] > 0 else "left"
-            plt.annotate(p.handle,
+            ax.annotate(p.handle,
                          (whr_ranks[i], yd_ratings[i]),
                          xytext=xytext,
                          horizontalalignment=horizontalalignment,
                          textcoords="offset points")
 
-    plt.xlabel("WHR rating")
-    plt.ylabel("YD rating")
+    ax.set_xlabel("WHR rating")
+    ax.set_ylabel("YD rating")
     plt.show()
 
 print("Done.")
