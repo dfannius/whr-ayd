@@ -52,12 +52,15 @@ if len(args.leagues) == 0:
 
 first_season = 0                # No longer really used
 
+rating_scale = 1.5
+rating_shift = -1.2
+
 # "rank" roughly corresponds to AGA ratings.
 def rating_to_rank(raw_r):
     # To convert to AGA ratings it seems that we should divide raw_r
     # by 1.6, but to get ratings to match up at all at both the top
     # and bottom of the population I need to multiply instead.
-    return raw_r * 1.5 - 1.2
+    return raw_r * rating_scale + rating_shift
 
 def rank_to_rank_str(rank, integral=False):
     if integral and int(rank) == rank:
@@ -734,12 +737,14 @@ if args.whr_vs_yd:
     players = [p for p in the_player_db.values() if p.include_in_graph()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
+    whr_stds = [rating_scale * p.latest_std() for p in players]
     yd_ratings = [p.get_yd_rating(args.league) for p in players]
 
     W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
-    (lsq, resid, rank, sing) = np.linalg.lstsq(W, yd_ratings)
+    (lsq, resid, rank, sing) = np.linalg.lstsq(W, yd_ratings, rcond=None)
 
     plt.scatter(whr_ranks, yd_ratings, s=4)
+    plt.errorbar(whr_ranks, yd_ratings, xerr=whr_stds, fmt="none", linewidth=0.2)
     (tick_vals, tick_labels) = plt.xticks()
     new_tick_labels = [rank_to_rank_str(r) for r in tick_vals]
     plt.xticks(tick_vals, new_tick_labels)
@@ -753,15 +758,16 @@ if args.whr_vs_yd:
     # Maybe we should divide by std
     deltas = [(yd_ratings[i] - (lsq[0] * whr_ranks[i] + lsq[1])) for i in range(len(players))]
     abs_deltas = [abs(d) for d in deltas]
-    # devs = [abs_deltas[i] / players[i].latest_std() for i in range(len(players))]
     delta_cutoff = sorted(abs_deltas, reverse=True)[9]
-    # dev_cutoff = sorted(devs, reverse=True)[9]
+    abs_devs = [abs(deltas[i] / whr_stds[i]) for i in range(len(players))]
+    dev_cutoff = sorted(abs_devs, reverse=True)[9]
     for (i, p) in enumerate(players):
-        if abs_deltas[i] >= delta_cutoff or p == callout:
+        # if abs_deltas[i] >= delta_cutoff or p == callout:
+        if abs_devs[i] >= dev_cutoff or p == callout:
             # print("{} is {}, should be {} to {} ".format(p.handle, yd_ratings[i], int(-deltas[i]),
             #                                             int(yd_ratings[i] - deltas[i])))
             plt.scatter([whr_ranks[i]], [yd_ratings[i]], s=4, c="orange")
-            xytext = (-5,-2) if deltas[i] > 0 else (5,-2)
+            xytext = (-5,-5) if deltas[i] > 0 else (5,-5)
             horizontalalignment = "right" if deltas[i] > 0 else "left"
             plt.annotate(p.handle,
                          (whr_ranks[i], yd_ratings[i]),
