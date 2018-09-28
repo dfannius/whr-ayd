@@ -1,7 +1,9 @@
 from typing import List, Optional, Tuple
 
 # TODO
-# - show rating changes for players with new games
+# - Predict result of game
+# - Show rating changes for players with new games
+# - Smarter choice of what player to update
 
 import argparse
 from bs4 import BeautifulSoup, NavigableString
@@ -161,7 +163,7 @@ class Player:
         print(',{}'.format(self.get_eyd_rating()), file=f, end="")
         print(',{}'.format(len(self.rating_history)), file=f, end="")
         for r in self.rating_history:
-            print(',{},{:.4f},{:.4f}'.format(r.date, r.rating, r.std), file=f, end="")
+            print(',{},{:.8f},{:.8f}'.format(r.date, r.rating, r.std), file=f, end="")
         print(file=f)
 
     # Takes a CSV row, already split
@@ -327,7 +329,7 @@ class Player:
         return (H, g)
 
     # Return magnitude of changes
-    def iterate_whr(self):
+    def iterate_whr(self) -> float:
         if self.root: return 0.0
 
         (H, g) = self.compute_derivatives()
@@ -570,20 +572,23 @@ def init_whr(player_db: PlayerDB):
         p.init_rating_history()
 
 def iterate_whr(player_db: PlayerDB):
-    sum_xsq = 0
+    max_change = -1
+    max_change_player = None
     for p in player_db.values():
-        sum_xsq += p.iterate_whr() * 2
-    return math.sqrt(sum_xsq)
+        change = abs(p.iterate_whr())
+        if change > max_change:
+            max_change = change
+            max_change_player = p
+    # print(f"Most changed player: {p.handle} = {p.latest_rating()}")
+    return max_change
 
 def run_whr(player_db: PlayerDB):
     for i in range(1000):
         if (i+1) % 100 == 0:
             print("{}...".format(i+1), end="", flush=True)
             # print("ITERATION {}".format(i))
-        change = iterate_whr(player_db)
-        avg_change = change / len(player_db) # maybe should be avg change per rating point?
-        # print("avg change", avg_change)
-        if avg_change < 0.001:
+        max_change = iterate_whr(player_db)
+        if max_change < 1e-06:
             print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""),
                   end="", flush=True)
             break
