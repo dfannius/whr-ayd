@@ -601,7 +601,7 @@ def print_report(player_db: PlayerDB, fname: str):
             if len(p.rating_history) > 0:
                 print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
                                                          rating_to_rank_str(p.latest_rating()),
-                                                         p.rating_history[-1].std,
+                                                         p.rating_history[-1].std * rating_scale,
                                                          p.rating_history[1:]),
                       file=f)
 
