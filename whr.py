@@ -123,11 +123,11 @@ class Player:
         self.name: str = name
         self.handle: str = handle
         self.games: List[Game] = []
-        self.yd_ratings: Mapping[int, RatingDatum] = {}
-        self.rating_history = []
-        self.player_db = player_db
-        self.root = is_root
-        self.rating_hash = {}
+        self.yd_ratings: Mapping[str, int] = {}
+        self.rating_history: List[RatingDatum] = []
+        self.player_db: PlayerDB = player_db
+        self.root: bool = is_root
+        self.rating_hash: Mapping[int, RatingDatum] = {}
 
     def __repr__(self):
         return "{} ({})".format(self.name, self.handle)
@@ -572,7 +572,7 @@ def init_whr(player_db: PlayerDB):
         p.init_rating_history()
 
 def iterate_whr(player_db: PlayerDB):
-    max_change = -1
+    max_change = -1.0
     max_change_player = None
     for p in player_db.values():
         change = abs(p.iterate_whr())
@@ -588,7 +588,7 @@ def run_whr(player_db: PlayerDB):
             print("{}...".format(i+1), end="", flush=True)
             # print("ITERATION {}".format(i))
         max_change = iterate_whr(player_db)
-        if max_change < 1e-06:
+        if max_change < 1e-05:
             print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""),
                   end="", flush=True)
             break
