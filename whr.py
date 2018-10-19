@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import re
+import scipy.integrate as integrate
 import sys
 
 parser = argparse.ArgumentParser(description="WHR for AYD")
@@ -48,6 +49,8 @@ parser.add_argument("--min-date", type=int, default=0, metavar="N",
                     help="Mininum active date for players in graph")
 parser.add_argument("--note-new-games", action="store_true", default=False,
                     help="Print the results of newly parsed games")
+parser.add_argument("--predict", type=str, nargs=2,
+                    help="Supply the probability of one player beating another")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
@@ -654,7 +657,7 @@ else:
         games = read_games_file(the_player_db, league_games_file(league), games)
 init_whr(the_player_db)
 
-need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd
+need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd or args.predict
 if args.load_ratings or (need_ratings and not args.analyze_games):
     old_player_db = PlayerDB()
     load_rating_history(old_player_db, ratings_file)
@@ -789,5 +792,15 @@ if args.whr_vs_yd:
     ax.set_xlabel("WHR rating")
     ax.set_ylabel("YD rating")
     plt.show()
+
+if args.predict:
+    p1_handle = args.predict[0]
+    p2_handle = args.predict[1]
+    p1 = the_player_db[p1_handle]
+    p2 = the_player_db[p2_handle]
+    mu_diff = p1.latest_rating() - p2.latest_rating()
+    var = p1.latest_std() ** 2 + p2.latest_std() ** 2
+    prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
+    print(f"The probability of {p1_handle} beating {p2_handle} is {prob*100:.3}%.")
 
 print("Done.")
