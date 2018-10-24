@@ -1,0 +1,1 @@
+python whr.py --predict $1 $2
