@@ -604,7 +604,7 @@ def print_report(player_db: PlayerDB, fname: str):
             if len(p.rating_history) > 0:
                 print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
                                                          rating_to_rank_str(p.latest_rating()),
-                                                         p.rating_history[-1].std * rating_scale,
+                                                         p.latest_std() * rating_scale,
                                                          p.rating_history[1:]),
                       file=f)
 
@@ -801,6 +801,10 @@ if args.predict:
     mu_diff = p1.latest_rating() - p2.latest_rating()
     var = p1.latest_std() ** 2 + p2.latest_std() ** 2
     prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
-    print(f"The probability of {p1_handle} beating {p2_handle} is {prob*100:.3}%.")
+    p1_rank_str = rating_to_rank_str(p1.latest_rating())
+    p1_std = p1.latest_std() * rating_scale
+    p2_rank_str = rating_to_rank_str(p2.latest_rating())
+    p2_std = p2.latest_std() * rating_scale
+    print(f"\nThe probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
 
 print("Done.")
