@@ -51,6 +51,8 @@ parser.add_argument("--note-new-games", action="store_true", default=False,
                     help="Print the results of newly parsed games")
 parser.add_argument("--predict", type=str, nargs=2,
                     help="Supply the probability of one player beating another")
+parser.add_argument("--report", action="store_true", default=False,
+                    help="Draw graphical report of players' ratings")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
@@ -153,10 +155,11 @@ class Player:
     def get_eyd_rating(self) -> float:
         return self.get_yd_rating("eyd")
 
-    def include_in_graph(self) -> bool:
+    def include_in_graph(self, require_both_results=True) -> bool:
         if self.root: return False
         if len(self.rating_history) <= 1: return False
-        if len(self.get_wins()) == 0 or len(self.get_losses()) == 0: return False
+        if require_both_results and (len(self.get_wins()) == 0 or len(self.get_losses()) == 0):
+            return False
         if self.handle == "Chimin": return False
         return True
 
@@ -706,6 +709,7 @@ if args.draw_graph:
     ratings = [r.rating for r in history]
     # with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
 
+    plt.figure(figsize=(8,16))
     plt.title("\n" + handle + "\n")
     plt.fill_between(dates,
                      [rating_to_rank(r.rating - r.std) for r in history], 
@@ -806,5 +810,37 @@ if args.predict:
     p2_rank_str = rating_to_rank_str(p2.latest_rating())
     p2_std = p2.latest_std() * rating_scale
     print(f"\nThe probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
+
+if args.report:
+    # TODO: combine with whr_vs_yd
+    players = [p for p in the_player_db.values() if p.include_in_graph(False)]
+    players = [p for p in players if p.rating_history[-1].date >= args.min_date]
+    players.sort(key=lambda p: p.latest_rating())
+    whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
+    whr_stds = [rating_scale * p.latest_std() for p in players]
+    min_rank = whr_ranks[0]
+
+    y_poses = range(1, len(players)+1)
+    fig, ax = plt.subplots(figsize=(8,16))
+
+    ax.get_yaxis().set_ticks([])
+    for (i, p) in enumerate(players):
+        # ax.text(-0.5, y_poses[i], p.handle)
+        ax.annotate(p.handle,
+                    xy=(whr_ranks[i] - whr_stds[i] - 0.5, y_poses[i]),
+                    fontsize="small",
+                    verticalalignment="center",
+                    horizontalalignment="right")
+    ax.scatter(whr_ranks, y_poses, s=4)
+    ax.errorbar(whr_ranks, y_poses, xerr=whr_stds, linewidth=0.2, fmt="none")
+
+    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=1))
+    tick_vals = ax.get_xticks()
+    tick_labels = ax.get_xticklabels()
+    new_tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
+    ax.set_xticks(tick_vals)
+    ax.set_xticklabels(new_tick_labels)
+
+    plt.show()
 
 print("Done.")
