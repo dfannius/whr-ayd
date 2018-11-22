@@ -1,7 +1,8 @@
 from typing import List, Optional, Tuple
 
 # TODO
-# - Predict result of game
+# + Predict result of game
+# - Check historical prediction accuracy
 # - Show rating changes for players with new games
 # - Smarter choice of what player to update
 
@@ -833,6 +834,8 @@ if args.report:
                     horizontalalignment="right")
     ax.scatter(whr_ranks, y_poses, s=4)
     ax.errorbar(whr_ranks, y_poses, xerr=whr_stds, linewidth=0.2, fmt="none")
+    for x in (-13, -8, -3, 1, 5,):
+        ax.axvline(x, color="black", linewidth=0.2)
 
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=1))
     tick_vals = ax.get_xticks()
