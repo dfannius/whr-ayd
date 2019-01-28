@@ -1,6 +1,6 @@
 #!/bin/bash
-python download-archive.py --league ayd --season 22
-python whr.py --league ayd --read-games --parse-seasons --parse-season-start 22 --load-ratings --analyze-games --print-report --note-new-games
+python download-archive.py --league ayd --season 23
+python whr.py --league ayd --read-games --parse-seasons --parse-season-start 23 --load-ratings --analyze-games --print-report --note-new-games
 
 # python download-archive.py --league eyd --season 21
 # python whr.py --leagues ayd,eyd --read-games --parse-seasons --parse-season-start 21 --load-ratings --analyze-games --print-report
