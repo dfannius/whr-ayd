@@ -381,6 +381,9 @@ class Player:
 
 class Game:
     def __init__(self, date: int, winner: Player, loser: Player) -> None:
+        # Wrong data entered on website
+        if date == 92 and winner.handle == "Phedias" and loser.handle == "autarch":
+            (winner, loser) = (loser, winner)
         self.date: int = date
         self.winner: Player = winner
         self.loser: Player = loser
