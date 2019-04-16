@@ -1,1 +1,1 @@
-python whr.py --draw-graph $1
+python whr.py --draw-graph $1 --graph-names

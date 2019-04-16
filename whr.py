@@ -10,6 +10,7 @@ import argparse
 from bs4 import BeautifulSoup, NavigableString
 import csv
 import glob
+import itertools
 import math
 import matplotlib
 import matplotlib.pyplot as plt
@@ -40,6 +41,8 @@ parser.add_argument("--load-ratings", action="store_true", default=False,
                     help="Load data from ratings file")
 parser.add_argument("--draw-graph", type=str, default=None, metavar="H",
                     help="Handle of user's graph to draw")
+parser.add_argument("--graph-names", action="store_true", default=False,
+                    help="Show opponent names on graph")
 parser.add_argument("--whr-vs-yd", action="store_true", default=False,
                     help="Draw scatterplot of WHR vs YD ratings")
 parser.add_argument("--league", type=str, default="ayd", metavar="S",
@@ -54,6 +57,8 @@ parser.add_argument("--predict", type=str, nargs=2,
                     help="Supply the probability of one player beating another")
 parser.add_argument("--report", action="store_true", default=False,
                     help="Draw graphical report of players' ratings")
+parser.add_argument("--accuracy", action="store_true", default=False,
+                    help="Produce report on WHR accuracy")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
@@ -75,7 +80,7 @@ def rank_to_rank_str(rank, integral=False):
     if integral and int(rank) == rank:
         rank = int(rank)
         if rank == 1:
-            return "1d/1k"
+            return "1k/1d"
         dan_fmt = "{}d"
         kyu_fmt = "{}k"
     else:
@@ -90,6 +95,7 @@ def rating_to_rank_str(raw_r):
     return rank_to_rank_str(rating_to_rank(raw_r))
 
 def r_to_gamma(r):
+    if r > 20: r = 20           # handle some strange overflow
     return math.exp(r)
 
 # A 'season' consists of three 'cycles' (each lasting one month) and
@@ -123,6 +129,15 @@ class RatingDatum:
 
     def __repr__(self):
         return "{}: {}".format(self.date, rating_to_rank_str(self.rating))
+
+class Result:
+    def __init__(self, date, handle, rating, won):
+        self.date = date        # date of game
+        self.handle = handle    # handle of opponent
+        self.rating = rating    # rating of opponent at that time
+        self.rank = rating_to_rank(rating)
+        self.sep_rank = self.rank
+        self.won = won          # whether we beat them
 
 class Player:
     def __init__(self, name, handle, player_db, is_root=False):
@@ -243,20 +258,31 @@ class Player:
         else:
             return self.rating_hash[date].gamma
 
-    def get_wins(self) -> List[Tuple[int, float]]:
+    def get_results(self):
         results = []
         for r in self.rating_history:
             for w in r.wins:
                 if not w.root:
-                    results.append((r.date, w.get_rating(r.date)))
+                    results.append(Result(r.date, w.handle, w.get_rating(r.date), True))
+            for l in r.losses:
+                if not l.root:
+                    results.append(Result(r.date, l.handle, l.get_rating(r.date), False))
         return results
 
-    def get_losses(self) -> List[Tuple[int, float]]:
+    def get_wins(self):
+        results = []
+        for r in self.rating_history:
+            for w in r.wins:
+                if not w.root:
+                    results.append((r.date, w.handle, w.get_rating(r.date)))
+        return results
+
+    def get_losses(self):
         results = []
         for r in self.rating_history:
             for l in r.losses:
                 if not l.root:
-                    results.append((r.date, l.get_rating(r.date)))
+                    results.append((r.date, l.handle, l.get_rating(r.date)))
         return results
 
     def get_rating(self, date: int) -> float:
@@ -308,7 +334,8 @@ class Player:
     def compute_derivatives(self):
         # The WHR paper expresses w^2 in units of Elo^2/day. The conversion to r^2/month
         # means multiplying by (ln(10) / 400)^2 * 30 ~= 0.001
-        elo_wsq = 100           # I've also tried 300 but this looks good
+        # elo_wsq = 100         # I've also tried 300 but this looks good
+        elo_wsq = 50            # but I think this may be even better!
         wsq = elo_wsq * 0.001
 
         num_points = len(self.rating_history)
@@ -326,17 +353,20 @@ class Player:
                 dr = r.rating - self.rating_history[i-1].rating
                 dt = r.date - self.rating_history[i-1].date
                 sigmasq_recip = 1./(dt * wsq)
+                # Almost all elements of g and diagonal elements of H get
+                # updated twice, once due to the relationship with the previous rating
+                # and once due to the relationship with the following rating.
                 g[i] -= dr * sigmasq_recip                   # Wiener
                 H[i,i] -= sigmasq_recip                      # Wiener
-                if i >= 1:
-                    g[i-1] += dr * sigmasq_recip             # Wiener
-                    H[i-1,i-1] -= sigmasq_recip              # Wiener
+                g[i-1] += dr * sigmasq_recip                 # Wiener
+                H[i-1,i-1] -= sigmasq_recip                  # Wiener
                 H[i-1,i] += sigmasq_recip                    # Wiener
                 H[i,i-1] += sigmasq_recip                    # Wiener
         return (H, g)
 
     # Return magnitude of changes
     def iterate_whr(self) -> float:
+        # print(f"iterate_whr {self.handle}")
         if self.root: return 0.0
 
         (H, g) = self.compute_derivatives()
@@ -664,7 +694,8 @@ else:
         games = read_games_file(the_player_db, league_games_file(league), games)
 init_whr(the_player_db)
 
-need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd or args.predict
+need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd \
+    or args.predict or args.report or args.accuracy
 if args.load_ratings or (need_ratings and not args.analyze_games):
     old_player_db = PlayerDB()
     load_rating_history(old_player_db, ratings_file)
@@ -701,6 +732,40 @@ def date_str_ticks(dates: List[int]):
 
     return tick_labels
 
+def sort_results(results):
+    return sorted(results, key = lambda r: (r.date, r.rating))
+
+def separate(results, delta):
+    clusters = [[[results[i].rank, results[i].rank, results[i].date]]
+                for i in range(len(results))] # (orig_val, new_val, date)
+    ok = False
+    while not ok:
+        ok = True
+        num_clusters = len(clusters)
+        last_val = None
+        last_date = None
+        i = 0
+        while i < len(clusters):
+            if last_val is not None:
+                if clusters[i][0][2] == last_date and clusters[i][0][1] < last_val + delta:
+                    clusters[i-1].extend(clusters[i])
+                    clusters = clusters[0:i] + clusters[i+1:]
+                    clust = clusters[i-1]   # cluster to update
+                    mean = sum(p[0] for p in clust) / len(clust)
+                    lowest = mean - delta * (len(clust) - 1) / 2
+                    for (j, p) in enumerate(clust):
+                        p[1] = lowest + j * delta
+                    last_val = clusters[i-1][-1][1]
+                    continue    # don't increment i
+            last_val = clusters[i][-1][1]
+            last_date = clusters[i][-1][2]
+            i += 1
+
+    pairs = list(itertools.chain.from_iterable(clusters))
+    vals = [pair[1] for pair in pairs]
+    for (i, r) in enumerate(results):
+        r.sep_rank = vals[i]
+
 if args.draw_graph:
     plot_dir = "plots"
     if not os.path.exists(plot_dir):
@@ -723,19 +788,44 @@ if args.draw_graph:
     plotted_ranks = ranks
     plt.plot(dates, ranks)
 
-    wins = p.get_wins()
+    results = sort_results(p.get_results())
+    max_rating = max(r.rating for r in results)
+    min_rating = min(r.rating for r in results)
+    rating_spread = max_rating - min_rating
+    separate(results, rating_spread / 50)
+    wins = [r for r in results if r.won]
+    losses = [r for r in results if not r.won]
+    
     if len(wins) > 0:
-        win_dates, win_ratings = zip(*wins)
+        win_dates = [w.date for w in wins]
+        win_handles = [w.handle for w in wins]
+        win_ratings = [w.rating for w in wins]
+        win_sep_ranks = [w.sep_rank for w in wins]
         win_ranks = [rating_to_rank(r) for r in win_ratings]
         plotted_ranks += win_ranks
         plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
-    losses = p.get_losses()
+        if args.graph_names:
+            for (i, handle) in enumerate(win_handles):
+                plt.annotate(handle,
+                             xy=(win_dates[i], win_sep_ranks[i]),
+                             xytext=(5, 0),
+                             textcoords="offset points",
+                             fontsize="x-small", verticalalignment="center", color="green")
     if len(losses) > 0:
-        loss_dates, loss_ratings = zip(*losses)
+        loss_dates = [l.date for l in losses]
+        loss_handles = [l.handle for l in losses]
+        loss_ratings = [l.rating for l in losses]
+        loss_sep_ranks = [l.sep_rank for l in losses]
         loss_ranks = [rating_to_rank(r) for r in loss_ratings]
         plotted_ranks += loss_ranks
         plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
-    
+        if args.graph_names:
+            for (i, handle) in enumerate(loss_handles):
+                plt.annotate(handle,
+                             xy=(loss_dates[i], loss_sep_ranks[i]),
+                             xytext=(5, 0),
+                             textcoords="offset points",
+                             fontsize="x-small", verticalalignment="center", color="red")
     y_min = int(min(plotted_ranks) - 1)
     y_max = int(max(plotted_ranks) + 1)
     plt.ylim(y_min, y_max)
@@ -825,7 +915,7 @@ if args.report:
     min_rank = whr_ranks[0]
 
     y_poses = range(1, len(players)+1)
-    fig, ax = plt.subplots(figsize=(8,16))
+    fig, ax = plt.subplots(figsize=(8,12))
 
     ax.get_yaxis().set_ticks([])
     for (i, p) in enumerate(players):
@@ -848,5 +938,12 @@ if args.report:
     ax.set_xticklabels(new_tick_labels)
 
     plt.show()
+
+if args.accuracy:
+    for g in games:
+        winner_rating = g.winner.get_rating_fast(g.date)
+        loser_raing = g.loser.get_rating_fast(g.date)
+        # Get stds as well
+        # Use algorithm from predict
 
 print("Done.")
