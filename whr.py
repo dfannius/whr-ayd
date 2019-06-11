@@ -2,7 +2,7 @@ from typing import List, Optional, Tuple
 
 # TODO
 # + Predict result of game
-# - Crosstables
+# + Crosstables
 # - Check historical prediction accuracy
 # - Show rating changes for players with new games
 # - Smarter choice of what player to update
@@ -596,10 +596,7 @@ def parse_seasons(player_db: PlayerDB,
                                                   g.loser.handle),
                   file=out_file)
 
-    if new_games and args.note_new_games:
-        print("\nNew games:")
-        for g in new_games:
-            print("  {} > {}".format(g.winner.handle, g.loser.handle))
+    return new_games
 
 # Read in the games file that was produced by analyze_seasons()
 # and append it to `games`
@@ -645,6 +642,16 @@ def run_whr(player_db: PlayerDB):
     for p in player_db.values():
         p.compute_stds()
 
+def predict(p1, p2):
+    mu_diff = p1.latest_rating() - p2.latest_rating()
+    var = p1.latest_std() ** 2 + p2.latest_std() ** 2
+    prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
+    p1_rank_str = rating_to_rank_str(p1.latest_rating())
+    p1_std = p1.latest_std() * rating_scale
+    p2_rank_str = rating_to_rank_str(p2.latest_rating())
+    p2_std = p2.latest_std() * rating_scale
+    return (p1_rank_str, p1_std, p2_rank_str, p2_std, prob)
+
 def print_report(player_db: PlayerDB, fname: str):
     with open(fname, "w") as f:
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
@@ -676,6 +683,7 @@ report_file = "{}-{}".format(args.league, args.report_file)
 
 leagues = args.leagues.split(",")
 
+new_games: List[Game] = []
 if args.parse_seasons:
     games: List[Game] = []
     if args.read_games:
@@ -689,12 +697,13 @@ if args.parse_seasons:
     for league in leagues:
         print("{}...".format(league), end="")
         games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
-        parse_seasons(the_player_db,
-                      league,
-                      args.parse_season_start,
-                      league_games_file(league),
-                      games,
-                      flushed_games)
+        these_new_games = parse_seasons(the_player_db,
+                                        league,
+                                        args.parse_season_start,
+                                        league_games_file(league),
+                                        games,
+                                        flushed_games)
+        new_games.extend(these_new_games)
 else:
     print("Reading games file...", end="", flush=True) 
     the_player_db.clear()
@@ -710,6 +719,12 @@ if args.load_ratings or (need_ratings and not args.analyze_games):
     old_player_db = PlayerDB()
     load_rating_history(old_player_db, ratings_file)
     the_player_db.copy_rating_history_from(old_player_db)
+
+if new_games and args.note_new_games:
+    print("\nNew games:")
+    for g in new_games:
+        (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(g.winner, g.loser)
+        print(f"   {g.winner.handle} ({p1_rank_str} ± {p1_std:.2f}) > {g.loser.handle} ({p2_rank_str} ± {p2_std:.2f}): chance was {prob*100:.3}%")
 
 if args.analyze_games:
     print("Running WHR...", end="", flush=True) 
@@ -907,13 +922,7 @@ if args.predict:
     p2_handle = args.predict[1]
     p1 = the_player_db[p1_handle]
     p2 = the_player_db[p2_handle]
-    mu_diff = p1.latest_rating() - p2.latest_rating()
-    var = p1.latest_std() ** 2 + p2.latest_std() ** 2
-    prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
-    p1_rank_str = rating_to_rank_str(p1.latest_rating())
-    p1_std = p1.latest_std() * rating_scale
-    p2_rank_str = rating_to_rank_str(p2.latest_rating())
-    p2_std = p2.latest_std() * rating_scale
+    (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(p1, p2)
     print(f"\nThe probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
 
 if args.report:
