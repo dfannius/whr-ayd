@@ -2,6 +2,7 @@ from typing import List, Optional, Tuple
 
 # TODO
 # + Predict result of game
+# - Crosstables
 # - Check historical prediction accuracy
 # - Show rating changes for players with new games
 # - Smarter choice of what player to update
@@ -57,8 +58,10 @@ parser.add_argument("--predict", type=str, nargs=2,
                     help="Supply the probability of one player beating another")
 parser.add_argument("--report", action="store_true", default=False,
                     help="Draw graphical report of players' ratings")
-parser.add_argument("--accuracy", action="store_true", default=False,
-                    help="Produce report on WHR accuracy")
+parser.add_argument("--changes", action="store_true", default=False,
+                    help="Produce report on ratings changes")
+parser.add_argument("--xtable", action="store_true", default=False,
+                    help="Produce crosstable report")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
@@ -104,7 +107,7 @@ def r_to_gamma(r):
 
 def date_to_season_cycle(d):
     season = int(d/4) + first_season
-    cycle = d - (season-first_season) * 4
+    cycle = d - (season - first_season) * 4
     return (season, cycle)
 
 def date_to_str(d):
@@ -112,7 +115,7 @@ def date_to_str(d):
     return "{}{}".format(season, "ABC"[cycle])
 
 def season_cycle_to_date(s, c):
-    return (s - first_season)*4 + c
+    return (s - first_season) * 4 + c
 
 class RatingDatum:
     """The rating of a player at a particular date."""
@@ -285,6 +288,13 @@ class Player:
                     results.append((r.date, l.handle, l.get_rating(r.date)))
         return results
 
+    def get_wl_vs(self, other_player):
+        (wins, losses) = (0, 0)
+        for r in self.rating_history:
+            wins += r.wins.count(other_player)
+            losses += r.losses.count(other_player)
+        return (wins, losses)
+
     def get_rating(self, date: int) -> float:
         if self.root:
             return 0
@@ -411,9 +421,9 @@ class Player:
 
 class Game:
     def __init__(self, date: int, winner: Player, loser: Player) -> None:
-        # Wrong data entered on website
-        if date == 92 and winner.handle == "Phedias" and loser.handle == "autarch":
-            (winner, loser) = (loser, winner)
+        # Wrong data entered on website; I think it's fixed by now
+        # if date == 92 and winner.handle == "Phedias" and loser.handle == "autarch":
+        #     (winner, loser) = (loser, winner)
         self.date: int = date
         self.winner: Player = winner
         self.loser: Player = loser
@@ -695,7 +705,7 @@ else:
 init_whr(the_player_db)
 
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd \
-    or args.predict or args.report or args.accuracy
+    or args.predict or args.report or args.changes or args.xtable
 if args.load_ratings or (need_ratings and not args.analyze_games):
     old_player_db = PlayerDB()
     load_rating_history(old_player_db, ratings_file)
@@ -778,7 +788,7 @@ if args.draw_graph:
     ratings = [r.rating for r in history]
     # with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
 
-    plt.figure(figsize=(8,16))
+    plt.figure(figsize=(8,12))
     plt.title("\n" + handle + "\n")
     plt.fill_between(dates,
                      [rating_to_rank(r.rating - r.std) for r in history], 
@@ -838,6 +848,7 @@ if args.draw_graph:
     plt.xlabel("Season")
     plt.ylabel("Rank")
     plt.savefig("{}/{}.png".format(plot_dir, handle))
+    plt.tight_layout()
     plt.show()
 
 if args.whr_vs_yd:
@@ -907,7 +918,7 @@ if args.predict:
 
 if args.report:
     # TODO: combine with whr_vs_yd
-    players = [p for p in the_player_db.values() if p.include_in_graph(False)]
+    players = [p for p in the_player_db.values() if p.include_in_graph(True)]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     players.sort(key=lambda p: p.latest_rating())
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
@@ -939,11 +950,50 @@ if args.report:
 
     plt.show()
 
-if args.accuracy:
-    for g in games:
-        winner_rating = g.winner.get_rating_fast(g.date)
-        loser_raing = g.loser.get_rating_fast(g.date)
-        # Get stds as well
-        # Use algorithm from predict
+if args.changes:
+    players = [p for p in the_player_db.values() if p.include_in_graph(True)]
+    slopes = []
+    for p in players:
+        earliest_date = p.rating_history[1].date
+        latest_date = p.rating_history[-1].date
+        earliest_rating = p.rating_history[1].rating
+        latest_rating = p.rating_history[-1].rating
+        date_delta = latest_date - earliest_date
+        rating_delta = latest_rating - earliest_rating
+        rating_slope = 0 if date_delta == 0 else rating_delta / date_delta
+        slopes.append( (p, rating_slope) )
+        # print(f"{p.handle}: {earliest_rating:.2f} on {earliest_date} to {latest_rating:.2f} on {latest_date}, slope {rating_slope:.3f}")
+    slopes.sort(key=lambda x:x[1], reverse=True)
+    for (p, slope) in slopes:
+        print(f"{p.handle:10} {slope:.3f}")
+    avg_slope = sum(slope for (p, slope) in slopes) / len(slopes)
+    print(f"Average slope {avg_slope:.3f}")
+
+if args.xtable:
+    players = [p for p in the_player_db.values()]
+    players = [p for p in players if p.rating_history[-1].date >= args.min_date]
+    players.sort(key=lambda p: p.latest_rating())
+    whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
+    print()
+    print("                      ", end="")
+    for (i, p1) in enumerate(players):
+        inits = "".join([n[0] for n in p1.name.split()])
+        print(f"{inits:3s} ", end="")
+        p1.inits = inits
+    print()
+    for (i, p1) in enumerate(players):
+        print(f"{p1.handle:10s} {rank_to_rank_str(whr_ranks[i]):>6s} {p1.inits:3s}", end="")
+        for (j, p2) in enumerate(players):
+            if p1 == p2:
+                print("--- ", end="")
+                continue
+            (wins, losses) = p1.get_wl_vs(p2)
+            if wins + losses > 0:
+                if wins >= 10: wins = "^"
+                if losses >= 10: losses = "^"
+                print(f"{wins}-{losses} ", end="")
+            else:
+                print("    ", end="")
+        print()
 
 print("Done.")
