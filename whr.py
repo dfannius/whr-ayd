@@ -1,3 +1,4 @@
+from collections import namedtuple
 from typing import List, Optional, Tuple
 
 # TODO
@@ -130,6 +131,9 @@ class RatingDatum:
     def set_std(self, std: float):
         self.std = std
 
+    def num_games(self):
+        return len(self.wins) + len(self.losses)
+
     def __repr__(self):
         return "{}: {}".format(self.date, rating_to_rank_str(self.rating))
 
@@ -223,13 +227,16 @@ class Player:
             self.rating_hash[r.date] = r
 
     def copy_rating_history_from(self, other: "Player"):
+        # print(f"{self} ({id(self)}) copying from {other} ({id(other)})")
         self.yd_ratings = other.yd_ratings.copy()
         for r in self.rating_history:
             if r.date in other.rating_hash:
+                # print(f"  adding rating from {r.date}")
                 other_r = other.rating_hash[r.date]
                 r.rating = other_r.rating
                 r.gamma = other_r.gamma
                 r.std = other_r.std
+        # print(f"  latest rating now {self.latest_rating()}")
 
     def add_game(self, game: "Game"):
         self.games.append(game)
@@ -238,16 +245,18 @@ class Player:
         self.games = [g for g in self.games if g.date < start_date]
 
     def latest_rating(self) -> float:
-        if len(self.rating_history) == 0:
-            return 0
-        else:
-            return self.rating_history[-1].rating
+        # There may be elements of the rating history that don't have any games yet,
+        # so we have to skip over them.
+        for r in reversed(self.rating_history):
+            if r.num_games() > 0 and r.std != 0:
+                return r.rating
+        return 0
 
     def latest_std(self) -> float:
-        if len(self.rating_history) == 0:
-            return 0
-        else:
-            return self.rating_history[-1].std
+        for r in reversed(self.rating_history):
+            if r.num_games() > 0 and r.std != 0:
+                return r.std
+        return 0
 
     def get_rating_fast(self, date) -> float:
         if self.root:
@@ -715,21 +724,37 @@ init_whr(the_player_db)
 
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd \
     or args.predict or args.report or args.changes or args.xtable
-if args.load_ratings or (need_ratings and not args.analyze_games):
+if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
+    print("Loading rating history...", end="", flush=True)
     old_player_db = PlayerDB()
     load_rating_history(old_player_db, ratings_file)
     the_player_db.copy_rating_history_from(old_player_db)
 
+NewGameStats = namedtuple("NewGame", ["p1", "p1_rank_str", "p1_std", "p2", "p2_rank_str", "p2_std", "prob"])
+new_game_stats = []
+
 if new_games and args.note_new_games:
-    print("\nNew games:")
     for g in new_games:
         (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(g.winner, g.loser)
-        print(f"   {g.winner.handle} ({p1_rank_str} ± {p1_std:.2f}) > {g.loser.handle} ({p2_rank_str} ± {p2_std:.2f}): chance was {prob*100:.3}%")
+        new_game_stats.append(NewGameStats(p1=g.winner, p1_rank_str=p1_rank_str, p1_std=p1_std,
+                                           p2=g.loser, p2_rank_str=p2_rank_str, p2_std=p2_std,
+                                           prob=prob))
+        # print(f"   {g.winner.handle} ({p1_rank_str} ± {p1_std:.2f}) > {g.loser.handle} ({p2_rank_str} ± {p2_std:.2f}): ({prob*100:.3}% chance)")
 
 if args.analyze_games:
     print("Running WHR...", end="", flush=True) 
     run_whr(the_player_db)
     save_rating_history(the_player_db, ratings_file)
+
+if new_games and args.note_new_games:
+    print("\nNew games:")
+    for gs in new_game_stats:
+        p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
+        p1_std = gs.p1.latest_std() * rating_scale
+        p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
+        p2_std = gs.p2.latest_std() * rating_scale
+        print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f} > ", end="")
+        print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
 
 if args.print_report:
     print("Printing report...", end="", flush=True) 
@@ -981,7 +1006,7 @@ if args.changes:
 if args.xtable:
     players = [p for p in the_player_db.values()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
-    players.sort(key=lambda p: p.latest_rating())
+    players.sort(key=lambda p: p.latest_rating(), reverse=True)
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     print()
     print("                      ", end="")
