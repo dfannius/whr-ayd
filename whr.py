@@ -830,13 +830,32 @@ if args.draw_graph:
 
     plt.figure(figsize=(8,12))
     plt.title("\n" + handle + "\n")
-    plt.fill_between(dates,
-                     [rating_to_rank(r.rating - r.std) for r in history], 
-                     [rating_to_rank(r.rating + r.std) for r in history],
-                     alpha=0.2)
     ranks = [rating_to_rank(r) for r in ratings]
     plotted_ranks = ranks
-    plt.plot(dates, ranks)
+    if len(dates) > 1:
+        plot_low_ranks = [rating_to_rank(r.rating - r.std) for r in history]
+        plot_high_ranks = [rating_to_rank(r.rating + r.std) for r in history]
+        plt.fill_between(dates,
+                         plot_low_ranks,
+                         plot_high_ranks,
+                         alpha=0.2)
+        plt.plot(dates, ranks)
+    else:
+        # Special hacky code for when we have only one date, so we don't
+        # draw an invisibly thin rectangle.
+        plt.xlim(dates[0] - 1, dates[0] + 1)
+        radius = 0.01
+        plot_dates = [dates[0] - radius, dates[0] + radius]
+        plot_ranks = [ranks[0], ranks[0]]
+        plot_low_rank = rating_to_rank(history[0].rating - history[0].std)
+        plot_high_rank = rating_to_rank(history[0].rating + history[0].std)
+        plot_low_ranks = [plot_low_rank] * 2
+        plot_high_ranks = [plot_high_rank] * 2
+        plt.fill_between(plot_dates,
+                         plot_low_ranks,
+                         plot_high_ranks,
+                         alpha=0.2)
+        plt.plot(plot_dates, plot_ranks)
 
     results = sort_results(p.get_results())
     max_rating = max(r.rating for r in results)
@@ -876,8 +895,8 @@ if args.draw_graph:
                              xytext=(5, 0),
                              textcoords="offset points",
                              fontsize="x-small", verticalalignment="center", color="red")
-    y_min = int(min(plotted_ranks) - 1)
-    y_max = int(max(plotted_ranks) + 1)
+    y_min = int(min(plotted_ranks + plot_low_ranks) - 1)
+    y_max = int(max(plotted_ranks + plot_high_ranks) + 1)
     plt.ylim(y_min, y_max)
 
     # (tick_vals, tick_labels) = plt.yticks()
