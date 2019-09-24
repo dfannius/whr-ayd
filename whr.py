@@ -753,7 +753,7 @@ if new_games and args.note_new_games:
         p1_std = gs.p1.latest_std() * rating_scale
         p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
         p2_std = gs.p2.latest_std() * rating_scale
-        print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f} > ", end="")
+        print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
         print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
 
 if args.print_report:
@@ -1017,17 +1017,24 @@ if args.xtable:
     print()
     for (i, p1) in enumerate(players):
         print(f"{p1.handle:10s} {rank_to_rank_str(whr_ranks[i]):>6s} {p1.inits:3s}", end="")
+        (wins_vs_stronger, losses_vs_stronger, wins_vs_weaker, losses_vs_weaker) = (0, 0, 0, 0)
         for (j, p2) in enumerate(players):
             if p1 == p2:
                 print("--- ", end="")
                 continue
             (wins, losses) = p1.get_wl_vs(p2)
             if wins + losses > 0:
+                if j < i:
+                    wins_vs_stronger += wins
+                    losses_vs_stronger += losses
+                else:
+                    wins_vs_weaker += wins
+                    losses_vs_weaker += losses
                 if wins >= 10: wins = "^"
                 if losses >= 10: losses = "^"
                 print(f"{wins}-{losses} ", end="")
             else:
                 print("    ", end="")
-        print()
+        print(f"  {wins_vs_stronger:2d}-{losses_vs_stronger:2d} {wins_vs_weaker:2d}-{losses_vs_weaker:2d}")
 
 print("Done.")
