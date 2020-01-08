@@ -256,7 +256,7 @@ class Player:
         for r in reversed(self.rating_history):
             if r.num_games() > 0 and r.std != 0:
                 return r.std
-        return 0
+        return 10                # If no ratings, we don't know anything
 
     def get_rating_fast(self, date) -> float:
         if self.root:
@@ -654,6 +654,9 @@ def run_whr(player_db: PlayerDB):
 def predict(p1, p2):
     mu_diff = p1.latest_rating() - p2.latest_rating()
     var = p1.latest_std() ** 2 + p2.latest_std() ** 2
+    if var == 0:
+        print( f"{p1.handle} and {p2.handle} have no variance!" )
+        var = 2
     prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
     p1_rank_str = rating_to_rank_str(p1.latest_rating())
     p1_std = p1.latest_std() * rating_scale
