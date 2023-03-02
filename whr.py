@@ -20,6 +20,8 @@ import numpy as np
 import os
 import re
 import scipy.integrate as integrate
+import seaborn as sns
+import sqlite3
 import sys
 
 parser = argparse.ArgumentParser(description="WHR for AYD")
@@ -63,24 +65,28 @@ parser.add_argument("--changes", action="store_true", default=False,
                     help="Produce report on ratings changes")
 parser.add_argument("--xtable", action="store_true", default=False,
                     help="Produce crosstable report")
+parser.add_argument("--store-games", action="store_true", default=False,
+                    help="Store all games to DB")
+parser.add_argument("--load-games", action="store_true", default=False,
+                    help="Load games from DB")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
     args.leagues = args.league
 
-first_season = 0                # No longer really used
+RATING_SCALE = 1.5
+RATING_SHIFT = -0.2
 
-rating_scale = 1.5
-rating_shift = -1.2
-
-# "rank" roughly corresponds to AGA ratings.
 def rating_to_rank(raw_r):
+    """Convert a raw (internal) rating to something more AGA-like."""
     # To convert to AGA ratings it seems that we should divide raw_r
     # by 1.6, but to get ratings to match up at all at both the top
     # and bottom of the population I need to multiply instead.
-    return raw_r * rating_scale + rating_shift
+    return raw_r * RATING_SCALE + RATING_SHIFT
 
 def rank_to_rank_str(rank, integral=False):
+    """Return the string representation of a rank. If `integral` is true and the
+    rank is an integer, don't add any decimals."""
     if integral and int(rank) == rank:
         rank = int(rank)
         if rank == 1:
@@ -96,9 +102,11 @@ def rank_to_rank_str(rank, integral=False):
         return kyu_fmt.format(2-rank)
 
 def rating_to_rank_str(raw_r):
+    """Return the string representation of a raw rating."""
     return rank_to_rank_str(rating_to_rank(raw_r))
 
 def r_to_gamma(r):
+    """Convert r (Elo-like rating) to gamma (Bradley-Terry-like rating)."""
     if r > 20: r = 20           # handle some strange overflow
     return math.exp(r)
 
@@ -107,8 +115,8 @@ def r_to_gamma(r):
 # up by 4 with each new season.
 
 def date_to_season_cycle(d):
-    season = int(d/4) + first_season
-    cycle = d - (season - first_season) * 4
+    season = int(d/4)
+    cycle = d - season * 4
     return (season, cycle)
 
 def date_to_str(d):
@@ -116,7 +124,7 @@ def date_to_str(d):
     return "{}{}".format(season, "ABC"[cycle])
 
 def season_cycle_to_date(s, c):
-    return (s - first_season) * 4 + c
+    return s * 4 + c
 
 class RatingDatum:
     """The rating of a player at a particular date."""
@@ -353,8 +361,8 @@ class Player:
     def compute_derivatives(self):
         # The WHR paper expresses w^2 in units of Elo^2/day. The conversion to r^2/month
         # means multiplying by (ln(10) / 400)^2 * 30 ~= 0.001
-        # elo_wsq = 100         # I've also tried 300 but this looks good
-        elo_wsq = 50            # but I think this may be even better!
+        elo_wsq = 100         # I've also tried 300 but this looks good
+        # elo_wsq = 50            # but I think this may be even better!
         wsq = elo_wsq * 0.001
 
         num_points = len(self.rating_history)
@@ -430,9 +438,6 @@ class Player:
 
 class Game:
     def __init__(self, date: int, winner: Player, loser: Player) -> None:
-        # Wrong data entered on website; I think it's fixed by now
-        # if date == 92 and winner.handle == "Phedias" and loser.handle == "autarch":
-        #     (winner, loser) = (loser, winner)
         self.date: int = date
         self.winner: Player = winner
         self.loser: Player = loser
@@ -453,7 +458,8 @@ class PlayerDB:
     def get_player(self, name: str, handle: str, is_root=False) -> Player:
         if handle in self.player_map:
             player = self.player_map[handle]
-            assert(player.name == name)
+            # print(player.name, name)
+            # assert(player.name == name)
             return player
         else:
             player = Player(name, handle, self, is_root)
@@ -487,13 +493,17 @@ class PlayerDB:
 the_player_db = PlayerDB()
 
 def is_cycle_name(tag):
-    return (tag.name == "b" and tag.contents[0].startswith("AYD") or
+    return (tag.name == "b" and tag.contents[0].startswith("AYD")
+            or
             tag.name == "h3" and "League" in tag.contents[0])
 
 # A full cycle name is something like "AYD League B, March 2014".
 # Get just the date part
 def cycle_to_date(s: str) -> str:
-    return s.split(", ")[-1]
+    if "," in s:
+        return s.split(", ")[-1]
+    else:
+        return " ".join(s.split(" ")[-2:])
 
 def flush_old_games(player_db: PlayerDB, start_season: int, old_games: List[Game]):
     start_date = season_cycle_to_date(start_season, 0)
@@ -501,6 +511,15 @@ def flush_old_games(player_db: PlayerDB, start_season: int, old_games: List[Game
     games = [g for g in old_games if g.date < start_date]
     flushed_games = [g for g in old_games if g.date >= start_date]
     return games, flushed_games
+
+def get_crosstable_tag(starting_at_tag):
+    tag = starting_at_tag.previous_sibling
+    while tag is not None:
+        if type(tag) is NavigableString or tag.name != "h3":
+            tag = tag.previous_sibling
+        else:
+            return tag
+    return None
 
 def parse_seasons(player_db: PlayerDB,
                   league: str,
@@ -513,15 +532,15 @@ def parse_seasons(player_db: PlayerDB,
     # An overview file may contain all three cycles of a season (AYD,
     # early EYD seasons) or a single cycle (late EYD seasons).
     overview_files = glob.glob("{}-overviews/*-overview.html".format(league))
-    overview_file_array: List[Optional[str]] = []
-    overview_file_re = re.compile(r"(\d+)-overview.html")
+    overview_file_array: List[[List[str]]] = []
+    overview_file_re = re.compile(r"(\d+)-([^-]*)-overview.html")
     for fn in overview_files:
         match = re.search(overview_file_re, fn)
         if match:
             date = int(match.group(1))
             while date >= len(overview_file_array):
-                overview_file_array.append(None)
-            overview_file_array[date] = fn
+                overview_file_array.append([])
+            overview_file_array[date].append(fn)
 
     # player_db.remove_recent_games(start_date)
     # games = [g for g in existing_games if g.date < start_date]
@@ -530,70 +549,79 @@ def parse_seasons(player_db: PlayerDB,
 
     anchor_date = start_date
     while anchor_date < len(overview_file_array):
-        fn = overview_file_array[anchor_date]
-        if fn is None:
-            anchor_date += 1
-            continue
         print("{}...".format(anchor_date), end="", flush=True)
-        with open(fn, "rb") as f:
-            soup = BeautifulSoup(f, "lxml")
+        for fn in overview_file_array[anchor_date]:
+            with open(fn, "rb") as f:
+                soup = BeautifulSoup(f, "lxml")
 
-            # First find the names of the cycles
-            season_cycles: List[str] = [] # Names of cycles in this season, in chronological order
+                # First find the names of the cycles
+                season_cycles: List[str] = [] # Names of cycles in this season, in chronological order
 
-            cycle_tags = soup.find_all(is_cycle_name)
-            for cycle_tag in cycle_tags:
-                date_name = cycle_to_date(cycle_tag.contents[0])
-                if date_name not in season_cycles:
-                    season_cycles.append(date_name)
-            season_cycles.reverse()
+                cycle_tags = soup.find_all(is_cycle_name)
+                for cycle_tag in cycle_tags:
+                    date_name = cycle_to_date(cycle_tag.contents[0])
+                    if date_name not in season_cycles:
+                        season_cycles.append(date_name)
+                season_cycles.reverse()
 
-            # Now find the crosstables
-            crosstables = soup.find_all("table", id="pointsTable")
-            for crosstable in crosstables:
-                # Find the name and date of this table
-                crosstable_name = crosstable.find_parent("table").previous_sibling
-                while type(crosstable_name) is NavigableString or crosstable_name.name != "h3":
-                    crosstable_name = crosstable_name.previous_sibling
-                crosstable_date = cycle_to_date(crosstable_name.contents[0])
-                date = anchor_date + season_cycles.index(crosstable_date)
+                # Now find the crosstables
+                crosstables = soup.find_all("table", id="pointsTable")
+                for crosstable in crosstables:
+                    # Find the name and date of this table
+                    # print("CROSSTABLE")
+                    # print(crosstable)
+                    parent = crosstable.find_parent("table")
+                    # print("PARENT")
+                    # print(parent)
+                    crosstable_name = get_crosstable_tag(parent)
+                    if crosstable_name is None:
+                        crosstable_name = get_crosstable_tag(parent.find_parent("table"))
+                    # print(f"crosstable_name {crosstable_name}")
+                    crosstable_date = cycle_to_date(crosstable_name.contents[0])
+                    date = anchor_date + season_cycles.index(crosstable_date)
+                    # print(f"crosstable_date = {crosstable_date}, date = {date}")
 
-                # Construct the list of players, in order
-                crosstable_players = []
-                trs = crosstable.find_all("tr")
-                for tr in trs:
-                    tds = tr.find_all("td")
-                    if len(tds) > 0:
-                        name = tds[1].nobr.a.contents[0]
-                        handle = tds[2].contents[0]
-                        yd_rating = int(tds[11].contents[0])
-                        player = player_db.get_player(name, handle)
-                        player.set_yd_rating(league, yd_rating)
-                        crosstable_players.append(player)
+                    # Construct the list of players, in order
+                    crosstable_players = []
+                    trs = crosstable.find_all("tr")
+                    for tr in trs:
+                        tds = tr.find_all("td")
+                        if len(tds) > 0:
+                            #XX print(tds)
+                            #XX name = tds[1].nobr.a.contents[0]
+                            #XX handle = tds[2].contents[0]
+                            handle = tds[1].a.contents[0]
+                            name = handle
+                            #XX print(handle)
+                            #XX yd_rating = int(tds[11].contents[0])
+                            yd_rating = int(tds[-1].contents[0])
+                            player = player_db.get_player(name, handle)
+                            player.set_yd_rating(league, yd_rating)
+                            crosstable_players.append(player)
 
-                # Parse game results
-                row_player_idx = 0
-                for tr in trs:
-                    tds = tr.find_all("td")
-                    if len(tds) > 0:
-                        for col_player_idx in range(row_player_idx + 1, len(crosstable_players)):
-                            gif = tds[3+col_player_idx].find("img")["src"]
-                            if gif:
-                                if gif.endswith("won.gif"):
-                                    winner = crosstable_players[row_player_idx]
-                                    loser = crosstable_players[col_player_idx]
-                                elif gif.endswith("lost.gif"):
-                                    winner = crosstable_players[col_player_idx]
-                                    loser = crosstable_players[row_player_idx]
-                                else: # empty or forfeit
-                                    continue
-                                game = Game(date, winner, loser)
-                                if game.date >= start_date and game not in flushed_games:
-                                    new_games.append(game)
-                                games.append(game)
-                                winner.add_game(game)
-                                loser.add_game(game)
-                        row_player_idx += 1
+                    # Parse game results
+                    row_player_idx = 0
+                    for tr in trs:
+                        tds = tr.find_all("td")
+                        if len(tds) > 0:
+                            for col_player_idx in range(row_player_idx + 1, len(crosstable_players)):
+                                gif = tds[2+col_player_idx].find("img")["src"]
+                                if gif:
+                                    if gif.endswith("won.gif"):
+                                        winner = crosstable_players[row_player_idx]
+                                        loser = crosstable_players[col_player_idx]
+                                    elif gif.endswith("lost.gif"):
+                                        winner = crosstable_players[col_player_idx]
+                                        loser = crosstable_players[row_player_idx]
+                                    else: # empty or forfeit
+                                        continue
+                                    game = Game(date, winner, loser)
+                                    if game.date >= start_date and game not in flushed_games:
+                                        new_games.append(game)
+                                    games.append(game)
+                                    winner.add_game(game)
+                                    loser.add_game(game)
+                            row_player_idx += 1
         anchor_date += 1
 
     with open(out_fname, "w") as out_file:
@@ -659,9 +687,9 @@ def predict(p1, p2):
         var = 2
     prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
     p1_rank_str = rating_to_rank_str(p1.latest_rating())
-    p1_std = p1.latest_std() * rating_scale
+    p1_std = p1.latest_std() * RATING_SCALE
     p2_rank_str = rating_to_rank_str(p2.latest_rating())
-    p2_std = p2.latest_std() * rating_scale
+    p2_std = p2.latest_std() * RATING_SCALE
     return (p1_rank_str, p1_std, p2_rank_str, p2_std, prob)
 
 def print_report(player_db: PlayerDB, fname: str):
@@ -670,7 +698,7 @@ def print_report(player_db: PlayerDB, fname: str):
             if len(p.rating_history) > 0:
                 print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
                                                          rating_to_rank_str(p.latest_rating()),
-                                                         p.latest_std() * rating_scale,
+                                                         p.latest_std() * RATING_SCALE,
                                                          p.rating_history[1:]),
                       file=f)
 
@@ -689,6 +717,35 @@ def load_rating_history(player_db: PlayerDB, fname: str):
 
 def league_games_file(league: str):
     return "{}-{}".format(league, args.games_file)
+
+def make_db():
+    con = sqlite3.connect("whr.db")
+    cur = con.cursor()
+    cur.execute("CREATE TABLE games(date, winner, loser, UNIQUE(date, winner, loser))")
+    con.commit()
+
+def store_games(games: List[Game]):
+    con = sqlite3.connect("whr.db")
+    cur = con.cursor()
+    data = [ (g.date, g.winner.handle, g.loser.handle) for g in games ]
+    cur.executemany("INSERT OR IGNORE INTO games VALUES(?, ?, ?)", data)
+    con.commit()
+
+def load_games(player_db: PlayerDB) -> List[Game]:
+    games = []
+    con = sqlite3.connect("whr.db")
+    cur = con.cursor()
+    cur.execute("SELECT * from games")
+    rows = cur.fetchall()
+    for (date, winner, loser) in rows:
+        winner = player_db.get_player(winner, winner)
+        loser = player_db.get_player(loser, loser)
+        game = Game(date, winner, loser)
+        games.append(game)
+        winner.add_game(game)
+        loser.add_game(game)
+    con.commit()
+    return games
 
 ratings_file = "{}-{}".format(args.league, args.ratings_file)
 report_file = "{}-{}".format(args.league, args.report_file)
@@ -717,13 +774,17 @@ if args.parse_seasons:
                                         flushed_games)
         new_games.extend(these_new_games)
 else:
-    print("Reading games file...", end="", flush=True) 
-    the_player_db.clear()
-    games = []
-    for league in leagues:
-        print("{}...".format(league), end="")
-        games = read_games_file(the_player_db, league_games_file(league), games)
+    load_games(the_player_db)
+    # print("Reading games file...", end="", flush=True) 
+    # the_player_db.clear()
+    # games = []
+    # for league in leagues:
+    #     print("{}...".format(league), end="")
+    #     games = read_games_file(the_player_db, league_games_file(league), games)
 init_whr(the_player_db)
+
+if args.store_games:
+    store_games(games)
 
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd \
     or args.predict or args.report or args.changes or args.xtable
@@ -753,17 +814,21 @@ if new_games and args.note_new_games:
     print("\nNew games:")
     for gs in new_game_stats:
         p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
-        p1_std = gs.p1.latest_std() * rating_scale
+        p1_std = gs.p1.latest_std() * RATING_SCALE
         p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
-        p2_std = gs.p2.latest_std() * rating_scale
+        p2_std = gs.p2.latest_std() * RATING_SCALE
         print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
         print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
+        #XX print(f"   {gs.p1.handle} ({gs.p1_rank_str} ± {gs.p1_std} -> {p1_rank_str} ± {p1_std}) > ", end="")
+        #XX print(f"{gs.p2.handle} ({gs.p2_rank_str} ± {gs.p2_std} -> {p2_rank_str} ± {p2_std}) ({gs.prob*100}% chance)")
+        
 
 if args.print_report:
     print("Printing report...", end="", flush=True) 
     print_report(the_player_db, report_file)
 
-plt.style.use("seaborn-darkgrid")
+# plt.style.use("seaborn-darkgrid")
+sns.set_theme()
 
 def date_str_ticks(dates: List[int]):
     # Put a label just on the middle cycle of each season, unless the player didn't play that one.
@@ -917,7 +982,7 @@ if args.whr_vs_yd:
     players = [p for p in the_player_db.values() if p.include_in_graph()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
-    whr_stds = [rating_scale * p.latest_std() for p in players]
+    whr_stds = [RATING_SCALE * p.latest_std() for p in players]
     yd_ratings = [p.get_yd_rating(args.league) for p in players]
 
     W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
@@ -978,7 +1043,7 @@ if args.report:
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     players.sort(key=lambda p: p.latest_rating())
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
-    whr_stds = [rating_scale * p.latest_std() for p in players]
+    whr_stds = [RATING_SCALE * p.latest_std() for p in players]
     min_rank = whr_ranks[0]
 
     y_poses = range(1, len(players)+1)

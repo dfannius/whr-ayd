@@ -1,1 +1,1 @@
-python whr.py --draw-graph $1 --graph-names
+python whr.py --leagues ayd,eyd --draw-graph $1 --graph-names
