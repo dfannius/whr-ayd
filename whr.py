@@ -155,8 +155,7 @@ class Result:
         self.won = won          # whether we beat them
 
 class Player:
-    def __init__(self, name, handle, player_db, is_root=False):
-        self.name: str = name
+    def __init__(self, handle, player_db, is_root: bool = False):
         self.handle: str = handle
         self.games: List[Game] = []
         self.yd_ratings: Mapping[str, int] = {}
@@ -166,7 +165,7 @@ class Player:
         self.rating_hash: Mapping[int, RatingDatum] = {}
 
     def __repr__(self):
-        return "{} ({})".format(self.name, self.handle)
+        return self.handle
 
     def set_yd_rating(self, league: str, rating: float):
         self.yd_ratings[league] = rating
@@ -195,7 +194,7 @@ class Player:
         return True
 
     def write_rating_history(self, f):
-        print('"{}","{}"'.format(self.name, self.handle), file=f, end="")
+        print('"{}"'.format(self.handle), file=f, end="")
         print(',{}'.format(self.get_ayd_rating()), file=f, end="")
         print(',{}'.format(self.get_eyd_rating()), file=f, end="")
         print(',{}'.format(len(self.rating_history)), file=f, end="")
@@ -453,16 +452,14 @@ class Game:
 class PlayerDB:
     def __init__(self):
         self.player_map: Mapping[str, Player] = {}
-        self.root_player: Player = self.get_player("[root]", "[root]", is_root=True)
+        self.root_player: Player = self.get_player("[root]", is_root=True)
 
-    def get_player(self, name: str, handle: str, is_root=False) -> Player:
+    def get_player(self, handle: str, is_root=False) -> Player:
         if handle in self.player_map:
             player = self.player_map[handle]
-            # print(player.name, name)
-            # assert(player.name == name)
             return player
         else:
-            player = Player(name, handle, self, is_root)
+            player = Player(handle, self, is_root)
             self.player_map[handle] = player
             return player
 
@@ -591,11 +588,10 @@ def parse_seasons(player_db: PlayerDB,
                             #XX name = tds[1].nobr.a.contents[0]
                             #XX handle = tds[2].contents[0]
                             handle = tds[1].a.contents[0]
-                            name = handle
                             #XX print(handle)
                             #XX yd_rating = int(tds[11].contents[0])
                             yd_rating = int(tds[-1].contents[0])
-                            player = player_db.get_player(name, handle)
+                            player = player_db.get_player(handle)
                             player.set_yd_rating(league, yd_rating)
                             crosstable_players.append(player)
 
@@ -626,12 +622,7 @@ def parse_seasons(player_db: PlayerDB,
 
     with open(out_fname, "w") as out_file:
         for g in games:
-            print('{},"{}","{}","{}","{}"'.format(g.date,
-                                                  g.winner.name,
-                                                  g.winner.handle,
-                                                  g.loser.name,
-                                                  g.loser.handle),
-                  file=out_file)
+            print('{},"{}","{}"'.format(g.date, g.winner.handle, g.loser.handle), file=out_file)
 
     return new_games
 
@@ -641,10 +632,10 @@ def read_games_file(player_db: PlayerDB, fname: str, games: List[Game]) -> List[
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            (date_str, winner_name, winner_handle, loser_name, loser_handle) = row
+            (date_str, winner_handle, loser_handle) = row
             date = int(date_str)
-            winner = player_db.get_player(winner_name, winner_handle)
-            loser = player_db.get_player(loser_name, loser_handle)
+            winner = player_db.get_player(winner_handle)
+            loser = player_db.get_player(loser_handle)
             game = Game(date, winner, loser)
             games.append(game)
             winner.add_game(game)
@@ -711,9 +702,8 @@ def load_rating_history(player_db: PlayerDB, fname: str):
     with open(fname) as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            (name, handle) = row[:2]
-            p = player_db.get_player(name, handle)
-            p.read_rating_history(row[2:])
+            p = player_db.get_player(row[0])
+            p.read_rating_history(row[1:])
 
 def league_games_file(league: str):
     return "{}-{}".format(league, args.games_file)
@@ -738,8 +728,8 @@ def load_games(player_db: PlayerDB) -> List[Game]:
     cur.execute("SELECT * from games")
     rows = cur.fetchall()
     for (date, winner, loser) in rows:
-        winner = player_db.get_player(winner, winner)
-        loser = player_db.get_player(loser, loser)
+        winner = player_db.get_player(winner)
+        loser = player_db.get_player(loser)
         game = Game(date, winner, loser)
         games.append(game)
         winner.add_game(game)
@@ -781,6 +771,7 @@ else:
     # for league in leagues:
     #     print("{}...".format(league), end="")
     #     games = read_games_file(the_player_db, league_games_file(league), games)
+
 init_whr(the_player_db)
 
 if args.store_games:
@@ -1098,7 +1089,7 @@ if args.xtable:
     print()
     print("                      ", end="")
     for (i, p1) in enumerate(players):
-        inits = "".join([n[0] for n in p1.name.split()])
+        inits = p1.handle
         print(f"{inits:3s} ", end="")
         p1.inits = inits
     print()
