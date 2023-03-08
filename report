@@ -1,2 +1,2 @@
 #!/bin/sh
-python whr.py --report --min-date 116
+python whr.py --report --min-date 140
