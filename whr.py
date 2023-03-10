@@ -4,13 +4,16 @@ from typing import List, Optional, Tuple
 # TODO
 # + Predict result of game
 # + Crosstables
+# + Show rating changes for players with new games
+# + Is incremental rating updating working?
+# - After loading ratings, set new unpopulated ratings to a good default (latest)
+# - General cleanup of options and top-level logic now that the DB is working
+# - Get YD ratings again
 # - Check historical prediction accuracy
-# - Show rating changes for players with new games
 # - Smarter choice of what player to update
 
 import argparse
 from bs4 import BeautifulSoup, NavigableString
-import csv
 import glob
 import itertools
 import math
@@ -25,14 +28,8 @@ import sqlite3
 import sys
 
 parser = argparse.ArgumentParser(description="WHR for AYD")
-parser.add_argument("--games-file", type=str, default="games.csv", metavar="F",
-                    help="File of game data")
-parser.add_argument("--ratings-file", type=str, default="ratings.csv", metavar="F",
-                    help="File of ratings data")
 parser.add_argument("--report-file", type=str, default="report.txt", metavar="F",
                     help="File with ratings report")
-parser.add_argument("--read-games", action="store_true", default=False,
-                    help="Read games file before parsing new seasons")
 parser.add_argument("--parse-seasons", action="store_true", default=False,
                     help="Parse HTML season files into game data file")
 parser.add_argument("--parse-season-start", type=int, default=1, metavar="N",
@@ -41,8 +38,6 @@ parser.add_argument("--analyze-games", action="store_true", default=False,
                     help="Analyze game data file")
 parser.add_argument("--print-report", action="store_true", default=False,
                     help="Produce ratings report")
-parser.add_argument("--read-ratings", action="store_true", default=False,
-                    help="Read data from ratings file")
 parser.add_argument("--draw-graph", type=str, default=None, metavar="H",
                     help="Handle of user's graph to draw")
 parser.add_argument("--graph-names", action="store_true", default=False,
@@ -67,8 +62,6 @@ parser.add_argument("--xtable", action="store_true", default=False,
                     help="Produce crosstable report")
 parser.add_argument("--store-games", action="store_true", default=False,
                     help="Store all games to DB")
-parser.add_argument("--load-games", action="store_true", default=False,
-                    help="Load games from DB")
 parser.add_argument("--store-ratings", action="store_true", default=False,
                     help="Store all ratings to DB")
 parser.add_argument("--load-ratings", action="store_true", default=False,
@@ -79,7 +72,7 @@ if len(args.leagues) == 0:
     args.leagues = args.league
 
 RATING_SCALE = 1.5
-RATING_SHIFT = -0.2
+RATING_SHIFT = -1.2
 
 def rating_to_rank(raw_r):
     """Convert a raw (internal) rating to something more AGA-like."""
@@ -206,37 +199,6 @@ class Player:
             print(',{},{:.8f},{:.8f}'.format(r.date, r.rating, r.std), file=f, end="")
         print(file=f)
 
-    # Takes a CSV row, already split
-    def read_csv_rating_history(self, row: List[str]):
-        self.set_ayd_rating(int(row[0]))
-        self.set_eyd_rating(int(row[1]))
-
-        row = row[2:]
-        num_points = int(row[0])
-        appending = False
-        rating_idx = 0
-        for i in range(num_points):
-            (date, rating, std) = (int(row[3*i+1]),
-                                   float(row[3*i+2]),
-                                   float(row[3*i+3]))
-            if not appending:
-                while (rating_idx < len(self.rating_history) and
-                       self.rating_history[rating_idx].date != date):
-                    rating_idx += 1
-                if rating_idx >= len(self.rating_history):
-                    appending = True
-                else:
-                    r = self.rating_history[rating_idx]
-                    r.rating = rating
-                    r.gamma = r_to_gamma(rating)
-                    r.std = std
-
-            if appending:
-                self.rating_history.append(RatingDatum(date, rating, std))
-
-        for r in self.rating_history:
-            self.rating_hash[r.date] = r
-
     def add_rating(self, date, rating, std):
         for r in self.rating_history:
             if r.date == date:
@@ -254,6 +216,7 @@ class Player:
     def copy_rating_history_from(self, other: "Player"):
         # print(f"{self} ({id(self)}) copying from {other} ({id(other)})")
         self.yd_ratings = other.yd_ratings.copy()
+        latest_new_rating = 0
         for r in self.rating_history:
             if r.date in other.rating_hash:
                 # print(f"  adding rating from {r.date}")
@@ -539,7 +502,6 @@ def get_crosstable_tag(starting_at_tag):
 def parse_seasons(player_db: PlayerDB,
                   league: str,
                   start_season: int,
-                  out_fname: str,
                   existing_games: List[Game] ,
                   flushed_games: List[Game]):
     start_date = season_cycle_to_date(start_season, 0)
@@ -638,27 +600,7 @@ def parse_seasons(player_db: PlayerDB,
                             row_player_idx += 1
         anchor_date += 1
 
-    with open(out_fname, "w") as out_file:
-        for g in games:
-            print('{},"{}","{}"'.format(g.date, g.winner.handle, g.loser.handle), file=out_file)
-
     return new_games
-
-# Read in the games file that was produced by analyze_seasons()
-# and append it to `games`
-def read_games_file(player_db: PlayerDB, fname: str, games: List[Game]) -> List[Game]:
-    with open(fname) as csvfile:
-        reader = csv.reader(csvfile)
-        for row in reader:
-            (date_str, winner_handle, loser_handle) = row
-            date = int(date_str)
-            winner = player_db.get_player(winner_handle)
-            loser = player_db.get_player(loser_handle)
-            game = Game(date, winner, loser)
-            games.append(game)
-            winner.add_game(game)
-            loser.add_game(game)
-    return games
 
 def init_whr(player_db: PlayerDB):
     for p in player_db.values():
@@ -716,37 +658,26 @@ def save_rating_history(player_db: PlayerDB, fname: str):
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
               p.write_rating_history(f)
 
-def load_csv_rating_history(player_db: PlayerDB, fname: str):
-    with open(fname) as csvfile:
-        reader = csv.reader(csvfile)
-        for row in reader:
-            p = player_db.get_player(row[0])
-            p.read_csv_rating_history(row[1:])
-
-def league_games_file(league: str):
-    return "{}-{}".format(league, args.games_file)
-
 DB_NAME = "whr.db"
 
+db_con = sqlite3.connect(DB_NAME)
+
 def make_db():
-    con = sqlite3.connect(DB_NAME)
-    cur = con.cursor()
+    cur = db_con.cursor()
     cur.execute("CREATE TABLE games(date, winner, loser, UNIQUE(date, winner, loser))")
-    con.commit()
+    db_con.commit()
     cur.close()
 
 def store_games(games: List[Game]):
-    con = sqlite3.connect(DB_NAME)
-    cur = con.cursor()
+    cur = db_con.cursor()
     data = [ (g.date, g.winner.handle, g.loser.handle) for g in games ]
-    cur.executemany("INSERT INTO games VALUES(?, ?, ?) ON CONFLICT DO NOTHING", data)
-    con.commit()
+    cur.executemany("INSERT OR REPLACE INTO games VALUES(?, ?, ?)", data)
+    db_con.commit()
     cur.close()
 
 def load_games(player_db: PlayerDB) -> List[Game]:
     games = []
-    con = sqlite3.connect(DB_NAME)
-    cur = con.cursor()
+    cur = db_con.cursor()
     cur.execute("SELECT * from games")
     rows = cur.fetchall()
     for (date, winner, loser) in rows:
@@ -756,23 +687,20 @@ def load_games(player_db: PlayerDB) -> List[Game]:
         games.append(game)
         winner.add_game(game)
         loser.add_game(game)
-    con.commit()
+    db_con.commit()
     cur.close()
     return games
 
 def store_ratings(player_db: PlayerDB):
-    con = sqlite3.connect(DB_NAME)
-    cur = con.cursor()
+    cur = db_con.cursor()
     data = [ (p.handle, r.date, r.rating, r.std) for p in player_db.values() for r in p.rating_history ]
-    print([(a,b,c,d) for (a,b,c,d) in data if a == "dfan"])
-    cur.executemany("INSERT INTO ratings VALUES(?, ?, ?, ?) ON CONFLICT DO NOTHING", data)
-    con.commit()
+    cur.executemany("INSERT OR REPLACE INTO ratings VALUES(?, ?, ?, ?)", data)
+    db_con.commit()
     cur.close()
 
 def load_ratings(player_db: PlayerDB):
     old_player_db = PlayerDB()
-    con = sqlite3.connect(DB_NAME)
-    cur = con.cursor()
+    cur = db_con.cursor()
     cur.execute("SELECT * from ratings")
     rows = cur.fetchall()
     for (player, date, rating, std) in rows:
@@ -781,29 +709,17 @@ def load_ratings(player_db: PlayerDB):
     for player in old_player_db.values():
         player.hash_ratings()
     player_db.copy_rating_history_from(old_player_db)
-    con.commit()
+    db_con.commit()
     cur.close()
 
-ratings_file = "{}-{}".format(args.league, args.ratings_file)
 report_file = "{}-{}".format(args.league, args.report_file)
 
 leagues = args.leagues.split(",")
 
-games: List[Game] = []
+games: List[Game] = load_games(the_player_db)
 new_games: List[Game] = []
 
-if load_games:
-    games = load_games(the_player_db)
-
 if args.parse_seasons:
-    if args.read_games:
-        the_player_db.clear()
-        print("Reading games file...", end="", flush=True) 
-        games = []
-        for league in leagues:
-            print("{}...".format(league), end="")
-            games = read_games_file(the_player_db, league_games_file(league), games)
-
     print("Parsing seasons...", end="", flush=True) 
     games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
     for league in leagues:
@@ -811,23 +727,16 @@ if args.parse_seasons:
         these_new_games = parse_seasons(the_player_db,
                                         league,
                                         args.parse_season_start,
-                                        league_games_file(league),
                                         games,
                                         flushed_games)
         new_games.extend(these_new_games)
+    store_games(games)
 
 init_whr(the_player_db)
 
-if args.store_games:
-    store_games(games)
-
 need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd \
     or args.predict or args.report or args.changes or args.xtable
-if args.read_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
-    # print("Reading rating history...", end="", flush=True)
-    # old_player_db = PlayerDB()
-    # load_csv_rating_history(old_player_db, ratings_file)
-    # the_player_db.copy_rating_history_from(old_player_db)
+if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
     print("Loading rating history...", end="", flush=True)
     load_ratings(the_player_db)
 
@@ -842,14 +751,12 @@ if new_games and args.note_new_games:
                                            prob=prob))
         # print(f"   {g.winner.handle} ({p1_rank_str} ± {p1_std:.2f}) > {g.loser.handle} ({p2_rank_str} ± {p2_std:.2f}): ({prob*100:.3}% chance)")
 
-if args.analyze_games:
+if args.analyze_games or args.store_ratings:
     print("Running WHR...", end="", flush=True) 
     run_whr(the_player_db)
-    save_rating_history(the_player_db, ratings_file)
-
-if args.store_ratings:
-    print(the_player_db["dfan"].rating_history)
     store_ratings(the_player_db)
+
+db_con.close()
 
 if new_games and args.note_new_games:
     print("\nNew games:")
@@ -1094,7 +1001,7 @@ if args.report:
         # ax.text(-0.5, y_poses[i], p.handle)
         ax.annotate(p.handle,
                     xy=(whr_ranks[i] - whr_stds[i] - 0.5, y_poses[i]),
-                    fontsize="small",
+                    fontsize="x-small",
                     verticalalignment="center",
                     horizontalalignment="right")
     ax.scatter(whr_ranks, y_poses, s=4)

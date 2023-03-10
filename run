@@ -1,4 +1,4 @@
 #!/bin/bash
 python3 download-archive.py --league ayd --season 35
 python3 download-archive.py --league eyd --season 35
-python3 whr.py --leagues ayd,eyd --load-games --store-games --parse-seasons --parse-season-start 35 --analyze-games --print-report
+python3 whr.py --leagues ayd,eyd --parse-seasons --parse-season-start 35 --analyze-games --note-new-games
