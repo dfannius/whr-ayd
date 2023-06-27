@@ -1,14 +1,15 @@
 from collections import namedtuple
-from typing import List, Optional, Tuple
+from typing import List, Mapping, Optional, Tuple
 
 # TODO
 # + Predict result of game
 # + Crosstables
 # + Show rating changes for players with new games
 # + Is incremental rating updating working?
-# - After loading ratings, set new unpopulated ratings to a good default (latest)
+# - After loading ratings, set new unpopulated ratings to a good default (most recent)
 # - General cleanup of options and top-level logic now that the DB is working
 # - Get YD ratings again
+#   (The problem is that you can only get historical ratings through the player page)
 # - Check historical prediction accuracy
 # - Smarter choice of what player to update
 
@@ -144,18 +145,18 @@ class RatingDatum:
 
 class Result:
     def __init__(self, date, handle, rating, won):
-        self.date = date        # date of game
-        self.handle = handle    # handle of opponent
-        self.rating = rating    # rating of opponent at that time
-        self.rank = rating_to_rank(rating)
-        self.sep_rank = self.rank
-        self.won = won          # whether we beat them
+        self.date: int = date        # date of game
+        self.handle: str = handle    # handle of opponent
+        self.rating: float = rating    # rating of opponent at that time
+        self.rank: float = rating_to_rank(rating)
+        self.sep_rank: float = self.rank
+        self.won: bool = won          # whether we beat them
 
 class Player:
     def __init__(self, handle, player_db, is_root: bool = False):
         self.handle: str = handle
         self.games: List[Game] = []
-        self.yd_ratings: Mapping[str, int] = {}
+        self.yd_ratings: Mapping[int, int] = {} # key is date
         self.rating_history: List[RatingDatum] = []
         self.player_db: PlayerDB = player_db
         self.root: bool = is_root
@@ -164,23 +165,17 @@ class Player:
     def __repr__(self):
         return self.handle
 
-    def set_yd_rating(self, league: str, rating: float):
-        self.yd_ratings[league] = rating
+    def set_yd_rating(self, date: int, yd_rating: int):
+        self.yd_ratings[date] = yd_rating
 
-    def set_ayd_rating(self, ayd_rating: float):
-        self.set_yd_rating("ayd", ayd_rating)
-        
-    def set_eyd_rating(self, eyd_rating: float):
-        self.set_yd_rating("eyd", eyd_rating)
-        
-    def get_yd_rating(self, league: str) -> float:
-        return self.yd_ratings.get(league, 0)
-        
-    def get_ayd_rating(self) -> float:
-        return self.get_yd_rating("ayd")
+    def get_yd_rating(self, date: int) -> int:
+        return self.yd_ratings[date]
 
-    def get_eyd_rating(self) -> float:
-        return self.get_yd_rating("eyd")
+    def get_latest_yd_rating(self) -> int:
+        if self.yd_ratings:
+            return self.yd_ratings[max(self.yd_ratings.keys())]
+        else:
+            return 0
 
     def include_in_graph(self, require_both_results=True) -> bool:
         if self.root: return False
@@ -188,18 +183,18 @@ class Player:
         if require_both_results and (len(self.get_wins()) == 0 or len(self.get_losses()) == 0):
             return False
         if self.handle == "Chimin": return False
+        if self.handle == "RMeigs": return False # throws YD calculations off too much
         return True
 
     def write_rating_history(self, f):
         print('"{}"'.format(self.handle), file=f, end="")
-        print(',{}'.format(self.get_ayd_rating()), file=f, end="")
-        print(',{}'.format(self.get_eyd_rating()), file=f, end="")
+        print(',{}'.format(self.get_latest_yd_rating()), file=f, end="")
         print(',{}'.format(len(self.rating_history)), file=f, end="")
         for r in self.rating_history:
             print(',{},{:.8f},{:.8f}'.format(r.date, r.rating, r.std), file=f, end="")
         print(file=f)
 
-    def add_rating(self, date, rating, std):
+    def add_rating(self, date: int, rating: float, std: float):
         for r in self.rating_history:
             if r.date == date:
                 r.rating = rating
@@ -215,7 +210,6 @@ class Player:
 
     def copy_rating_history_from(self, other: "Player"):
         # print(f"{self} ({id(self)}) copying from {other} ({id(other)})")
-        self.yd_ratings = other.yd_ratings.copy()
         latest_new_rating = 0
         for r in self.rating_history:
             if r.date in other.rating_hash:
@@ -258,7 +252,7 @@ class Player:
         else:
             return self.rating_hash[date].gamma
 
-    def get_results(self):
+    def get_results(self) -> List[Result]:
         results = []
         for r in self.rating_history:
             for w in r.wins:
@@ -269,7 +263,7 @@ class Player:
                     results.append(Result(r.date, l.handle, l.get_rating(r.date), False))
         return results
 
-    def get_wins(self):
+    def get_wins(self) -> List[Result]:
         results = []
         for r in self.rating_history:
             for w in r.wins:
@@ -277,7 +271,7 @@ class Player:
                     results.append((r.date, w.handle, w.get_rating(r.date)))
         return results
 
-    def get_losses(self):
+    def get_losses(self) -> List[Result]:
         results = []
         for r in self.rating_history:
             for l in r.losses:
@@ -391,7 +385,7 @@ class Player:
                 d[i] = H[i,i] - a[i] * b[i-1]
                 if i < num_points-1:
                     b[i] = H[i,i+1]
-        
+
         y = np.zeros(num_points)
         x = np.zeros(num_points)
         y[0] = g[0]
@@ -572,7 +566,7 @@ def parse_seasons(player_db: PlayerDB,
                             #XX yd_rating = int(tds[11].contents[0])
                             yd_rating = int(tds[-1].contents[0])
                             player = player_db.get_player(handle)
-                            player.set_yd_rating(league, yd_rating)
+                            player.set_yd_rating(date, yd_rating)
                             crosstable_players.append(player)
 
                     # Parse game results
@@ -712,6 +706,23 @@ def load_ratings(player_db: PlayerDB):
     db_con.commit()
     cur.close()
 
+def store_yd_ratings(player_db: PlayerDB):
+    cur = db_con.cursor()
+    data = [ (p.handle, date, yd_rating) for p in player_db.values() for (date, yd_rating) in p.yd_ratings.items() ]
+    cur.executemany("INSERT OR REPLACE INTO yd_ratings VALUES(?, ?, ?)", data)
+    db_con.commit()
+    cur.close()
+
+def load_yd_ratings(player_db: PlayerDB):
+    cur = db_con.cursor()
+    cur.execute("SELECT * from yd_ratings")
+    rows = cur.fetchall()
+    for (player, date, yd_rating) in rows:
+        p = player_db.get_player(player)
+        p.set_yd_rating(date, yd_rating)
+    db_con.commit()
+    cur.close()
+
 report_file = "{}-{}".format(args.league, args.report_file)
 
 leagues = args.leagues.split(",")
@@ -719,8 +730,11 @@ leagues = args.leagues.split(",")
 games: List[Game] = load_games(the_player_db)
 new_games: List[Game] = []
 
+print("Loading YD rating history...", end="", flush=True)
+load_yd_ratings(the_player_db)
+
 if args.parse_seasons:
-    print("Parsing seasons...", end="", flush=True) 
+    print("Parsing seasons...", end="", flush=True)
     games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
     for league in leagues:
         print("{}...".format(league), end="")
@@ -731,6 +745,9 @@ if args.parse_seasons:
                                         flushed_games)
         new_games.extend(these_new_games)
     store_games(games)
+
+print("Storing YD rating history...", end="", flush=True)
+store_yd_ratings(the_player_db)
 
 init_whr(the_player_db)
 
@@ -752,7 +769,7 @@ if new_games and args.note_new_games:
         # print(f"   {g.winner.handle} ({p1_rank_str} ± {p1_std:.2f}) > {g.loser.handle} ({p2_rank_str} ± {p2_std:.2f}): ({prob*100:.3}% chance)")
 
 if args.analyze_games or args.store_ratings:
-    print("Running WHR...", end="", flush=True) 
+    print("Running WHR...", end="", flush=True)
     run_whr(the_player_db)
     store_ratings(the_player_db)
 
@@ -771,7 +788,7 @@ if new_games and args.note_new_games:
         #XX print(f"{gs.p2.handle} ({gs.p2_rank_str} ± {gs.p2_std} -> {p2_rank_str} ± {p2_std}) ({gs.prob*100}% chance)")
 
 if args.print_report:
-    print("Printing report...", end="", flush=True) 
+    print("Printing report...", end="", flush=True)
     print_report(the_player_db, report_file)
 
 # plt.style.use("seaborn-darkgrid")
@@ -797,10 +814,10 @@ def date_str_ticks(dates: List[int]):
 
     return tick_labels
 
-def sort_results(results):
+def sort_results(results: List[Result]) -> List[Result]:
     return sorted(results, key = lambda r: (r.date, r.rating))
 
-def separate(results, delta):
+def separate(results: List[Result], delta):
     clusters = [[[results[i].rank, results[i].rank, results[i].date]]
                 for i in range(len(results))] # (orig_val, new_val, date)
     ok = False
@@ -879,7 +896,7 @@ if args.draw_graph:
     separate(results, rating_spread / 50)
     wins = [r for r in results if r.won]
     losses = [r for r in results if not r.won]
-    
+
     if len(wins) > 0:
         win_dates = [w.date for w in wins]
         win_handles = [w.handle for w in wins]
@@ -930,7 +947,7 @@ if args.whr_vs_yd:
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     whr_stds = [RATING_SCALE * p.latest_std() for p in players]
-    yd_ratings = [p.get_yd_rating(args.league) for p in players]
+    yd_ratings = [p.get_latest_yd_rating() for p in players]
 
     W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
     (lsq, resid, rank, sing) = np.linalg.lstsq(W, yd_ratings, rcond=None)
@@ -946,18 +963,19 @@ if args.whr_vs_yd:
     ax.set_xticks(tick_vals)
     ax.set_xticklabels(new_tick_labels)
 
-    callout = None              # player to highlight
-    if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_ayd_rating()])
+    callout = the_player_db["dfan"]              # player to highlight
+    if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_latest_yd_rating()])
 
-    ax.plot(whr_ranks,
-             [lsq[0] * r + lsq[1] for r in whr_ranks],
-             linewidth=0.2)
+    # ax.plot(whr_ranks,
+    #          [lsq[0] * r + lsq[1] for r in whr_ranks],
+    #          linewidth=0.2)
     # Maybe we should divide by std
     deltas = [(yd_ratings[i] - (lsq[0] * whr_ranks[i] + lsq[1])) for i in range(len(players))]
     abs_deltas = [abs(d) for d in deltas]
-    delta_cutoff = sorted(abs_deltas, reverse=True)[9]
+    num_callouts = 40
+    delta_cutoff = sorted(abs_deltas, reverse=True)[num_callouts-1]
     abs_devs = [abs(deltas[i] / whr_stds[i]) for i in range(len(players))]
-    dev_cutoff = sorted(abs_devs, reverse=True)[9]
+    dev_cutoff = sorted(abs_devs, reverse=True)[num_callouts-1]
     for (i, p) in enumerate(players):
         # if abs_deltas[i] >= delta_cutoff or p == callout:
         if abs_devs[i] >= dev_cutoff or p == callout:
@@ -970,7 +988,8 @@ if args.whr_vs_yd:
                          (whr_ranks[i], yd_ratings[i]),
                          xytext=xytext,
                          horizontalalignment=horizontalalignment,
-                         textcoords="offset points")
+                         textcoords="offset points",
+                         fontsize="x-small")
 
     ax.set_xlabel("WHR rating")
     ax.set_ylabel("YD rating")
