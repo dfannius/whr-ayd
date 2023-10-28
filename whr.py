@@ -6,11 +6,11 @@ from typing import List, Mapping, Optional, Tuple
 # + Crosstables
 # + Show rating changes for players with new games
 # + Is incremental rating updating working?
-# - Graph multiple players
+# + Graph multiple players
 # - Anchor players? (e.g., RMeigs)
 # - After loading ratings, set new unpopulated ratings to a good default (most recent)
 # - General cleanup of options and top-level logic now that the DB is working
-# - Get YD ratings again
+# - Get historical YD ratings again
 #   (The problem is that you can only get historical ratings through the player page)
 # - Check historical prediction accuracy
 # - Smarter choice of what player to update
@@ -43,6 +43,8 @@ parser.add_argument("--print-report", action="store_true", default=False,
                     help="Produce ratings report")
 parser.add_argument("--draw-graph", type=str, default=None, metavar="H",
                     help="Handle of user's graph to draw")
+parser.add_argument("--draw-graphs", type=str, nargs="+", default=None, metavar="H+",
+                    help="Handle of multiple users' graph to draw")
 parser.add_argument("--graph-names", action="store_true", default=False,
                     help="Show opponent names on graph")
 parser.add_argument("--whr-vs-yd", action="store_true", default=False,
@@ -753,7 +755,7 @@ store_yd_ratings(the_player_db)
 
 init_whr(the_player_db)
 
-need_ratings = args.print_report or args.draw_graph or args.whr_vs_yd \
+need_ratings = args.print_report or args.draw_graph or args.draw_graphs or args.whr_vs_yd \
     or args.predict or args.report or args.changes or args.xtable
 if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
     print("Loading rating history...", end="", flush=True)
@@ -850,96 +852,111 @@ def separate(results: List[Result], delta):
     for (i, r) in enumerate(results):
         r.sep_rank = vals[i]
 
-if args.draw_graph:
+if args.draw_graph or args.draw_graphs:
     plot_dir = "plots"
     if not os.path.exists(plot_dir):
         os.mkdir(plot_dir)
 
-    handle = args.draw_graph
-    p = the_player_db[handle]
-    history = p.rating_history[1:]
-    dates = [r.date for r in history]
-    ratings = [r.rating for r in history]
-    # with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
+    handles = [args.draw_graph] if args.draw_graph else args.draw_graphs
 
     plt.figure(figsize=(8,12))
-    plt.title("\n" + handle + "\n")
-    ranks = [rating_to_rank(r) for r in ratings]
-    plotted_ranks = ranks
-    if len(dates) > 1:
-        plot_low_ranks = [rating_to_rank(r.rating - r.std) for r in history]
-        plot_high_ranks = [rating_to_rank(r.rating + r.std) for r in history]
-        plt.fill_between(dates,
-                         plot_low_ranks,
-                         plot_high_ranks,
-                         alpha=0.2)
-        plt.plot(dates, ranks)
-    else:
-        # Special hacky code for when we have only one date, so we don't
-        # draw an invisibly thin rectangle.
-        plt.xlim(dates[0] - 1, dates[0] + 1)
-        radius = 0.01
-        plot_dates = [dates[0] - radius, dates[0] + radius]
-        plot_ranks = [ranks[0], ranks[0]]
-        plot_low_rank = rating_to_rank(history[0].rating - history[0].std)
-        plot_high_rank = rating_to_rank(history[0].rating + history[0].std)
-        plot_low_ranks = [plot_low_rank] * 2
-        plot_high_ranks = [plot_high_rank] * 2
-        plt.fill_between(plot_dates,
-                         plot_low_ranks,
-                         plot_high_ranks,
-                         alpha=0.2)
-        plt.plot(plot_dates, plot_ranks)
+    all_dates = []
+    all_plotted_ranks = []
 
-    results = sort_results(p.get_results())
-    max_rating = max(r.rating for r in results)
-    min_rating = min(r.rating for r in results)
-    rating_spread = max_rating - min_rating
-    separate(results, rating_spread / 50)
-    wins = [r for r in results if r.won]
-    losses = [r for r in results if not r.won]
+    if args.draw_graph:
+        plt.title("\n" + args.draw_graph + "\n")
 
-    if len(wins) > 0:
-        win_dates = [w.date for w in wins]
-        win_handles = [w.handle for w in wins]
-        win_ratings = [w.rating for w in wins]
-        win_sep_ranks = [w.sep_rank for w in wins]
-        win_ranks = [rating_to_rank(r) for r in win_ratings]
-        plotted_ranks += win_ranks
-        plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
-        if args.graph_names:
-            for (i, handle) in enumerate(win_handles):
-                plt.annotate(handle,
-                             xy=(win_dates[i], win_sep_ranks[i]),
-                             xytext=(5, 0),
-                             textcoords="offset points",
-                             fontsize="x-small", verticalalignment="center", color="green")
-    if len(losses) > 0:
-        loss_dates = [l.date for l in losses]
-        loss_handles = [l.handle for l in losses]
-        loss_ratings = [l.rating for l in losses]
-        loss_sep_ranks = [l.sep_rank for l in losses]
-        loss_ranks = [rating_to_rank(r) for r in loss_ratings]
-        plotted_ranks += loss_ranks
-        plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
-        if args.graph_names:
-            for (i, handle) in enumerate(loss_handles):
-                plt.annotate(handle,
-                             xy=(loss_dates[i], loss_sep_ranks[i]),
-                             xytext=(5, 0),
-                             textcoords="offset points",
-                             fontsize="x-small", verticalalignment="center", color="red")
-    y_min = int(min(plotted_ranks + plot_low_ranks) - 1)
-    y_max = int(max(plotted_ranks + plot_high_ranks) + 1)
+    for handle in handles:
+        p = the_player_db[handle]
+        history = p.rating_history[1:]
+        dates = [r.date for r in history]
+        all_dates = list(set(all_dates + dates))
+        ratings = [r.rating for r in history]
+        # with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
+
+        ranks = [rating_to_rank(r) for r in ratings]
+        plotted_ranks = ranks
+        if len(dates) > 1:
+            if args.draw_graph:
+                plot_low_ranks = [rating_to_rank(r.rating - r.std) for r in history]
+                plot_high_ranks = [rating_to_rank(r.rating + r.std) for r in history]
+                plt.fill_between(dates,
+                                 plot_low_ranks,
+                                 plot_high_ranks,
+                                 alpha=0.2)
+            plt.plot(dates, ranks, label=handle)
+        else:
+            # Special hacky code for when we have only one date, so we don't
+            # draw an invisibly thin rectangle.
+            plt.xlim(dates[0] - 1, dates[0] + 1)
+            radius = 0.01
+            plot_dates = [dates[0] - radius, dates[0] + radius]
+            plot_ranks = [ranks[0], ranks[0]]
+            if args.draw_graph:
+                plot_low_rank = rating_to_rank(history[0].rating - history[0].std)
+                plot_high_rank = rating_to_rank(history[0].rating + history[0].std)
+                plot_low_ranks = [plot_low_rank] * 2
+                plot_high_ranks = [plot_high_rank] * 2
+                plt.fill_between(plot_dates,
+                                 plot_low_ranks,
+                                 plot_high_ranks,
+                                 alpha=0.2)
+            plt.plot(plot_dates, plot_ranks, label=handle)
+
+        results = sort_results(p.get_results())
+        max_rating = max(r.rating for r in results)
+        min_rating = min(r.rating for r in results)
+        rating_spread = max_rating - min_rating
+        separate(results, rating_spread / 50)
+        wins = [r for r in results if r.won]
+        losses = [r for r in results if not r.won]
+
+        if len(wins) > 0 and args.draw_graph:
+            win_dates = [w.date for w in wins]
+            win_handles = [w.handle for w in wins]
+            win_ratings = [w.rating for w in wins]
+            win_sep_ranks = [w.sep_rank for w in wins]
+            win_ranks = [rating_to_rank(r) for r in win_ratings]
+            plotted_ranks += win_ranks
+            plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
+            if args.graph_names:
+                for (i, handle) in enumerate(win_handles):
+                    plt.annotate(handle,
+                                 xy=(win_dates[i], win_sep_ranks[i]),
+                                 xytext=(5, 0),
+                                 textcoords="offset points",
+                                 fontsize="x-small", verticalalignment="center", color="green")
+        if len(losses) > 0 and args.draw_graph:
+            loss_dates = [l.date for l in losses]
+            loss_handles = [l.handle for l in losses]
+            loss_ratings = [l.rating for l in losses]
+            loss_sep_ranks = [l.sep_rank for l in losses]
+            loss_ranks = [rating_to_rank(r) for r in loss_ratings]
+            plotted_ranks += loss_ranks
+            plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
+            if args.graph_names:
+                for (i, handle) in enumerate(loss_handles):
+                    plt.annotate(handle,
+                                 xy=(loss_dates[i], loss_sep_ranks[i]),
+                                 xytext=(5, 0),
+                                 textcoords="offset points",
+                                 fontsize="x-small", verticalalignment="center", color="red")
+
+        all_plotted_ranks += plotted_ranks
+
+    y_min = int(min(all_plotted_ranks) - 1)
+    y_max = int(max(all_plotted_ranks) + 1)
     plt.ylim(y_min, y_max)
 
     # (tick_vals, tick_labels) = plt.yticks()
     new_tick_vals = np.arange(y_min, y_max + 1, 1.0)
     new_tick_labels = [rank_to_rank_str(r, True) for r in new_tick_vals]
     plt.yticks(new_tick_vals, new_tick_labels)
-    plt.xticks(dates, date_str_ticks(dates))
+    plt.xticks(all_dates, date_str_ticks(all_dates))
     plt.xlabel("Season")
     plt.ylabel("Rank")
+    if args.draw_graphs:
+        plt.legend()
     plt.savefig("{}/{}.png".format(plot_dir, handle))
     plt.tight_layout()
     plt.show()
