@@ -6,6 +6,8 @@ from typing import List, Mapping, Optional, Tuple
 # + Crosstables
 # + Show rating changes for players with new games
 # + Is incremental rating updating working?
+# - Graph multiple players
+# - Anchor players? (e.g., RMeigs)
 # - After loading ratings, set new unpopulated ratings to a good default (most recent)
 # - General cleanup of options and top-level logic now that the DB is working
 # - Get YD ratings again
@@ -149,7 +151,7 @@ class Result:
         self.handle: str = handle    # handle of opponent
         self.rating: float = rating    # rating of opponent at that time
         self.rank: float = rating_to_rank(rating)
-        self.sep_rank: float = self.rank
+        self.sep_rank: float = self.rank # rank that may have been moved a bit to avoid overlap
         self.won: bool = won          # whether we beat them
 
 class Player:
@@ -336,7 +338,7 @@ class Player:
         # The WHR paper expresses w^2 in units of Elo^2/day. The conversion to r^2/month
         # means multiplying by (ln(10) / 400)^2 * 30 ~= 0.001
         # elo_wsq = 100         # I've also tried 300 but this looks good
-        elo_wsq = 25            # but I think this may be even better!
+        elo_wsq = 50            # but I think this may be even better!
         wsq = elo_wsq * 0.001
 
         num_points = len(self.rating_history)
