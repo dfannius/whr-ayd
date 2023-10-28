@@ -402,7 +402,7 @@ class Player:
 
     # Return list of std deviation at each rating point
     def compute_stds(self):
-        (H, g) = self.compute_derivatives()
+        (H, _g) = self.compute_derivatives()
         # We're only doing this once, I don't care about speed tricks
         Hinv = np.linalg.inv(H)
         for (i,r) in enumerate(self.rating_history):
@@ -718,13 +718,17 @@ def load_yd_ratings(player_db: PlayerDB):
     db_con.commit()
     cur.close()
 
-def update_new_game_stats():
+NewGameStats = namedtuple("NewGame", ["p1", "p1_rank_str", "p1_std", "p2", "p2_rank_str", "p2_std", "prob"])
+
+def compute_new_game_stats(new_games: List[Game]):
+    new_game_stats = []
     for g in new_games:
         (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(g.winner, g.loser)
         new_game_stats.append(NewGameStats(p1=g.winner, p1_rank_str=p1_rank_str, p1_std=p1_std,
                                            p2=g.loser, p2_rank_str=p2_rank_str, p2_std=p2_std,
                                            prob=prob))
         # print(f"   {g.winner.handle} ({p1_rank_str} ± {p1_std:.2f}) > {g.loser.handle} ({p2_rank_str} ± {p2_std:.2f}): ({prob*100:.3}% chance)")
+    return new_game_stats
 
 def date_str_ticks(dates: List[int]):
     # Put a label just on the middle cycle of each season, unless the player didn't play that one.
@@ -896,18 +900,17 @@ def do_whr_vs_yd():
     yd_ratings = [p.get_latest_yd_rating() for p in players]
 
     W = np.vstack([whr_ranks, np.ones(len(whr_ranks))]).T
-    (lsq, resid, rank, sing) = np.linalg.lstsq(W, yd_ratings, rcond=None)
+    (lsq, _resid, _rank, _sing) = np.linalg.lstsq(W, yd_ratings, rcond=None)
 
-    fig, ax = plt.subplots()
+    _fig, ax = plt.subplots()
     ax.scatter(whr_ranks, yd_ratings, s=4)
     ax.errorbar(whr_ranks, yd_ratings, xerr=whr_stds, fmt="none", linewidth=0.2)
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=1))
     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=100))
     tick_vals = ax.get_xticks()
-    tick_labels = ax.get_xticklabels()
-    new_tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
+    tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
     ax.set_xticks(tick_vals)
-    ax.set_xticklabels(new_tick_labels)
+    ax.set_xticklabels(tick_labels)
 
     callout = the_player_db["dfan"]              # player to highlight
     if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_latest_yd_rating()])
@@ -917,13 +920,10 @@ def do_whr_vs_yd():
     #          linewidth=0.2)
     # Maybe we should divide by std
     deltas = [(yd_ratings[i] - (lsq[0] * whr_ranks[i] + lsq[1])) for i in range(len(players))]
-    abs_deltas = [abs(d) for d in deltas]
     num_callouts = 40
-    delta_cutoff = sorted(abs_deltas, reverse=True)[num_callouts-1]
     abs_devs = [abs(deltas[i] / whr_stds[i]) for i in range(len(players))]
     dev_cutoff = sorted(abs_devs, reverse=True)[num_callouts-1]
     for (i, p) in enumerate(players):
-        # if abs_deltas[i] >= delta_cutoff or p == callout:
         if abs_devs[i] >= dev_cutoff or p == callout:
             # print("{} is {}, should be {} to {} ".format(p.handle, yd_ratings[i], int(-deltas[i]),
             #                                             int(yd_ratings[i] - deltas[i])))
@@ -956,10 +956,9 @@ def do_report():
     players.sort(key=lambda p: p.latest_rating())
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     whr_stds = [RATING_SCALE * p.latest_std() for p in players]
-    min_rank = whr_ranks[0]
 
     y_poses = range(1, len(players)+1)
-    fig, ax = plt.subplots(figsize=(8,12))
+    _fig, ax = plt.subplots(figsize=(8,12))
 
     ax.get_yaxis().set_ticks([])
     for (i, p) in enumerate(players):
@@ -976,10 +975,9 @@ def do_report():
 
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=1))
     tick_vals = ax.get_xticks()
-    tick_labels = ax.get_xticklabels()
-    new_tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
+    tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
     ax.set_xticks(tick_vals)
-    ax.set_xticklabels(new_tick_labels)
+    ax.set_xticklabels(tick_labels)
 
     plt.show()
 
@@ -1036,83 +1034,85 @@ def do_xtable():
                 print("    ", end="")
         print(f"  {wins_vs_stronger:2d}-{losses_vs_stronger:2d} {wins_vs_weaker:2d}-{losses_vs_weaker:2d}")
 
-report_file = "{}-{}".format(args.league, args.report_file)
+def run():
+    report_file = "{}-{}".format(args.league, args.report_file)
 
-leagues = args.leagues.split(",")
+    leagues = args.leagues.split(",")
 
-games: List[Game] = load_games(the_player_db)
-new_games: List[Game] = []
+    games: List[Game] = load_games(the_player_db)
+    new_games: List[Game] = []
 
-print("Loading YD rating history...", end="", flush=True)
-load_yd_ratings(the_player_db)
+    print("Loading YD rating history...", end="", flush=True)
+    load_yd_ratings(the_player_db)
 
-if args.parse_seasons:
-    print("Parsing seasons...", end="", flush=True)
-    games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
-    for league in leagues:
-        print("{}...".format(league), end="")
-        these_new_games = parse_seasons(the_player_db,
-                                        league,
-                                        args.parse_season_start,
-                                        games,
-                                        flushed_games)
-        new_games.extend(these_new_games)
-    store_games(games)
+    if args.parse_seasons:
+        print("Parsing seasons...", end="", flush=True)
+        games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
+        for league in leagues:
+            print("{}...".format(league), end="")
+            these_new_games = parse_seasons(the_player_db,
+                                            league,
+                                            args.parse_season_start,
+                                            games,
+                                            flushed_games)
+            new_games.extend(these_new_games)
+        store_games(games)
 
-print("Storing YD rating history...", end="", flush=True)
-store_yd_ratings(the_player_db)
+    print("Storing YD rating history...", end="", flush=True)
+    store_yd_ratings(the_player_db)
 
-init_whr(the_player_db)
+    init_whr(the_player_db)
 
-need_ratings = args.print_report or args.draw_graph or args.draw_graphs or args.whr_vs_yd \
-    or args.predict or args.report or args.changes or args.xtable
-if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
-    print("Loading rating history...", end="", flush=True)
-    load_ratings(the_player_db)
+    need_ratings = args.print_report or args.draw_graph or args.draw_graphs or args.whr_vs_yd \
+        or args.predict or args.report or args.changes or args.xtable
+    if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
+        print("Loading rating history...", end="", flush=True)
+        load_ratings(the_player_db)
 
-NewGameStats = namedtuple("NewGame", ["p1", "p1_rank_str", "p1_std", "p2", "p2_rank_str", "p2_std", "prob"])
-new_game_stats = []
+    new_game_stats = []
 
-if new_games and args.note_new_games:
-    update_new_game_stats()
+    if new_games and args.note_new_games:
+        new_game_stats = compute_new_game_stats(new_games)
 
-if args.analyze_games or args.store_ratings:
-    print("Running WHR...", end="", flush=True)
-    run_whr(the_player_db)
-    store_ratings(the_player_db)
+    if args.analyze_games or args.store_ratings:
+        print("Running WHR...", end="", flush=True)
+        run_whr(the_player_db)
+        store_ratings(the_player_db)
 
-db_con.close()
+    db_con.close()
 
-if new_games and args.note_new_games:
-    print("\nNew games:")
-    for gs in new_game_stats:
-        p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
-        p1_std = gs.p1.latest_std() * RATING_SCALE
-        p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
-        p2_std = gs.p2.latest_std() * RATING_SCALE
-        print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
-        print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
-        #XX print(f"   {gs.p1.handle} ({gs.p1_rank_str} ± {gs.p1_std} -> {p1_rank_str} ± {p1_std}) > ", end="")
-        #XX print(f"{gs.p2.handle} ({gs.p2_rank_str} ± {gs.p2_std} -> {p2_rank_str} ± {p2_std}) ({gs.prob*100}% chance)")
+    if new_games and args.note_new_games:
+        print("\nNew games:")
+        for gs in new_game_stats:
+            p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
+            p1_std = gs.p1.latest_std() * RATING_SCALE
+            p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
+            p2_std = gs.p2.latest_std() * RATING_SCALE
+            print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
+            print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
+            #XX print(f"   {gs.p1.handle} ({gs.p1_rank_str} ± {gs.p1_std} -> {p1_rank_str} ± {p1_std}) > ", end="")
+            #XX print(f"{gs.p2.handle} ({gs.p2_rank_str} ± {gs.p2_std} -> {p2_rank_str} ± {p2_std}) ({gs.prob*100}% chance)")
 
-if args.print_report:
-    print("Printing report...", end="", flush=True)
-    print_report(the_player_db, report_file)
+    if args.print_report:
+        print("Printing report...", end="", flush=True)
+        print_report(the_player_db, report_file)
 
-# plt.style.use("seaborn-darkgrid")
-sns.set_theme()
+    # plt.style.use("seaborn-darkgrid")
+    sns.set_theme()
 
-if args.draw_graph or args.draw_graphs:
-    do_draw_graphs()
-if args.whr_vs_yd:
-    do_whr_vs_yd()
-if args.predict:
-    do_predict()
-if args.report:
-    do_report()
-if args.changes:
-    do_changes()
-if args.xtable:
-    do_xtable()
+    if args.draw_graph or args.draw_graphs:
+        do_draw_graphs()
+    if args.whr_vs_yd:
+        do_whr_vs_yd()
+    if args.predict:
+        do_predict()
+    if args.report:
+        do_report()
+    if args.changes:
+        do_changes()
+    if args.xtable:
+        do_xtable()
 
-print("Done.")
+    print("Done.")
+
+run()
