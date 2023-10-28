@@ -16,18 +16,19 @@ from typing import List, Mapping
 # - Smarter choice of what player to update
 
 import argparse
-from bs4 import BeautifulSoup, NavigableString
 import glob
 import itertools
 import math
+import os
+import random
+import re
+import sqlite3
+from bs4 import BeautifulSoup, NavigableString
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import os
-import re
-import scipy.integrate as integrate
+from scipy import integrate
 import seaborn as sns
-import sqlite3
 
 parser = argparse.ArgumentParser(description="WHR for AYD")
 parser.add_argument("--report-file", type=str, default="report.txt", metavar="F",
@@ -108,7 +109,7 @@ def rating_to_rank_str(raw_r):
 
 def r_to_gamma(r):
     """Convert r (Elo-like rating) to gamma (Bradley-Terry-like rating)."""
-    if r > 20: r = 20           # handle some strange overflow
+    r = min(r, 20)           # handle some strange overflow
     return math.exp(r)
 
 # A 'season' consists of three 'cycles' (each lasting one month) and
@@ -600,7 +601,9 @@ def init_whr(player_db: PlayerDB):
 
 def iterate_whr(player_db: PlayerDB):
     max_change = -1.0
-    for p in player_db.values():
+    players = list(player_db.values())
+    random.shuffle(players)
+    for p in players:
         change = abs(p.iterate_whr())
         if change > max_change:
             max_change = change
@@ -753,9 +756,7 @@ def date_str_ticks(dates: List[int]):
 def sort_results(results: List[Result]) -> List[Result]:
     return sorted(results, key = lambda r: (r.date, r.rating))
 
-def separate(results: List[Result], delta):
-    clusters = [[[results[i].rank, results[i].rank, results[i].date]]
-                for i in range(len(results))] # (orig_val, new_val, date)
+def separate_clusters(clusters, delta):
     ok = False
     while not ok:
         ok = True
@@ -778,6 +779,12 @@ def separate(results: List[Result], delta):
             last_date = clusters[i][-1][2]
             i += 1
 
+    return clusters
+
+def separate(results: List[Result], delta):
+    clusters = [[[results[i].rank, results[i].rank, results[i].date]]
+                for i in range(len(results))] # (orig_val, new_val, date)
+    clusters = separate_clusters(clusters, delta)
     pairs = list(itertools.chain.from_iterable(clusters))
     vals = [pair[1] for pair in pairs]
     for (i, r) in enumerate(results):
@@ -789,6 +796,9 @@ def do_draw_graphs():
         os.mkdir(plot_dir)
 
     handles = [args.draw_graph] if args.draw_graph else args.draw_graphs
+    handle_colors = {}
+    last_dates = {}
+    last_ranks = {}
 
     plt.figure(figsize=(8,12))
     all_dates = []
@@ -815,7 +825,8 @@ def do_draw_graphs():
                                  plot_low_ranks,
                                  plot_high_ranks,
                                  alpha=0.2)
-            plt.plot(dates, ranks, label=handle)
+            line, = plt.plot(dates, ranks, label=handle)
+            handle_colors[handle] = line.get_color()
         else:
             # Special hacky code for when we have only one date, so we don't
             # draw an invisibly thin rectangle.
@@ -832,48 +843,69 @@ def do_draw_graphs():
                                  plot_low_ranks,
                                  plot_high_ranks,
                                  alpha=0.2)
-            plt.plot(plot_dates, plot_ranks, label=handle)
+            line, = plt.plot(plot_dates, plot_ranks, label=handle)
+            handle_colors[handle] = line.get_color()
 
-        results = sort_results(p.get_results())
-        max_rating = max(r.rating for r in results)
-        min_rating = min(r.rating for r in results)
-        rating_spread = max_rating - min_rating
-        separate(results, rating_spread / 50)
-        wins = [r for r in results if r.won]
-        losses = [r for r in results if not r.won]
+        last_dates[handle] = dates[-1]
+        last_ranks[handle] = ranks[-1]
 
-        if len(wins) > 0 and args.draw_graph:
-            win_dates = [w.date for w in wins]
-            win_handles = [w.handle for w in wins]
-            win_ratings = [w.rating for w in wins]
-            win_sep_ranks = [w.sep_rank for w in wins]
-            win_ranks = [rating_to_rank(r) for r in win_ratings]
-            plotted_ranks += win_ranks
-            plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
-            if args.graph_names:
-                for (i, handle) in enumerate(win_handles):
-                    plt.annotate(handle,
-                                 xy=(win_dates[i], win_sep_ranks[i]),
-                                 xytext=(5, 0),
-                                 textcoords="offset points",
-                                 fontsize="x-small", verticalalignment="center", color="green")
-        if len(losses) > 0 and args.draw_graph:
-            loss_dates = [l.date for l in losses]
-            loss_handles = [l.handle for l in losses]
-            loss_ratings = [l.rating for l in losses]
-            loss_sep_ranks = [l.sep_rank for l in losses]
-            loss_ranks = [rating_to_rank(r) for r in loss_ratings]
-            plotted_ranks += loss_ranks
-            plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
-            if args.graph_names:
-                for (i, handle) in enumerate(loss_handles):
-                    plt.annotate(handle,
-                                 xy=(loss_dates[i], loss_sep_ranks[i]),
-                                 xytext=(5, 0),
-                                 textcoords="offset points",
-                                 fontsize="x-small", verticalalignment="center", color="red")
+        if args.draw_graph:
+            results = sort_results(p.get_results())
+            max_rating = max(r.rating for r in results)
+            min_rating = min(r.rating for r in results)
+            rating_spread = max_rating - min_rating
+            separate(results, rating_spread / 50)
+            wins = [r for r in results if r.won]
+            losses = [r for r in results if not r.won]
+
+            if len(wins) > 0:
+                win_dates = [w.date for w in wins]
+                win_handles = [w.handle for w in wins]
+                win_ratings = [w.rating for w in wins]
+                win_sep_ranks = [w.sep_rank for w in wins]
+                win_ranks = [rating_to_rank(r) for r in win_ratings]
+                plotted_ranks += win_ranks
+                plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
+                if args.graph_names:
+                    for (i, win_handle) in enumerate(win_handles):
+                        plt.annotate(win_handle,
+                                     xy=(win_dates[i], win_sep_ranks[i]),
+                                     xytext=(5, 0),
+                                     textcoords="offset points",
+                                     fontsize="x-small", verticalalignment="center", color="green")
+            if len(losses) > 0:
+                loss_dates = [l.date for l in losses]
+                loss_handles = [l.handle for l in losses]
+                loss_ratings = [l.rating for l in losses]
+                loss_sep_ranks = [l.sep_rank for l in losses]
+                loss_ranks = [rating_to_rank(r) for r in loss_ratings]
+                plotted_ranks += loss_ranks
+                plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
+                if args.graph_names:
+                    for (i, loss_handle) in enumerate(loss_handles):
+                        plt.annotate(loss_handle,
+                                     xy=(loss_dates[i], loss_sep_ranks[i]),
+                                     xytext=(5, 0),
+                                     textcoords="offset points",
+                                     fontsize="x-small", verticalalignment="center", color="red")
 
         all_plotted_ranks += plotted_ranks
+
+    if args.draw_graphs:
+        cs = [[last_ranks[h], last_ranks[h], last_dates[h], h] for h in handles]
+        cs.sort(key=lambda x: (x[2], x[0]))
+        clusters = [[c] for c in cs] # (orig_val, new_val, date)
+        clusters = separate_clusters(clusters, 0.1)
+        vals = list(itertools.chain.from_iterable(clusters))
+        for v in vals:
+            plt.annotate(v[3],
+                         xy=(v[2], v[1]),
+                         xytext=(5,0),
+                         textcoords="offset points",
+                         fontsize="x-small",
+                         verticalalignment="center",
+                         color=handle_colors[v[3]])
+
 
     y_min = int(min(all_plotted_ranks) - 1)
     y_max = int(max(all_plotted_ranks) + 1)
@@ -886,8 +918,6 @@ def do_draw_graphs():
     plt.xticks(all_dates, date_str_ticks(all_dates))
     plt.xlabel("Season")
     plt.ylabel("Rank")
-    if args.draw_graphs:
-        plt.legend()
     plt.savefig("{}/{}.png".format(plot_dir, handle))
     plt.tight_layout()
     plt.show()
@@ -1001,8 +1031,7 @@ def do_changes():
     print(f"Average slope {avg_slope:.3f}")
 
 def do_xtable():
-    players = [p for p in the_player_db.values()]
-    players = [p for p in players if p.rating_history[-1].date >= args.min_date]
+    players = [p for p in the_player_db.values() if p.rating_history[-1].date >= args.min_date]
     players.sort(key=lambda p: p.latest_rating(), reverse=True)
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     print()
