@@ -1,5 +1,5 @@
 from collections import namedtuple
-from typing import List, Mapping, Optional, Tuple
+from typing import List, Mapping
 
 # TODO
 # + Predict result of game
@@ -28,7 +28,6 @@ import re
 import scipy.integrate as integrate
 import seaborn as sns
 import sqlite3
-import sys
 
 parser = argparse.ArgumentParser(description="WHR for AYD")
 parser.add_argument("--report-file", type=str, default="report.txt", metavar="F",
@@ -213,16 +212,12 @@ class Player:
             self.rating_hash[r.date] = r
 
     def copy_rating_history_from(self, other: "Player"):
-        # print(f"{self} ({id(self)}) copying from {other} ({id(other)})")
-        latest_new_rating = 0
         for r in self.rating_history:
             if r.date in other.rating_hash:
-                # print(f"  adding rating from {r.date}")
                 other_r = other.rating_hash[r.date]
                 r.rating = other_r.rating
                 r.gamma = other_r.gamma
                 r.std = other_r.std
-        # print(f"  latest rating now {self.latest_rating()}")
 
     def add_game(self, game: "Game"):
         self.games.append(game)
@@ -329,7 +324,7 @@ class Player:
         for g in self.games:
             if self.rating_history[i].date != g.date:
                 i += 1
-                assert(self.rating_history[i].date == g.date)
+                assert self.rating_history[i].date == g.date
             if g.winner == self:
                 self.rating_history[i].wins.append(g.loser)
             else:
@@ -408,7 +403,6 @@ class Player:
     # Return list of std deviation at each rating point
     def compute_stds(self):
         (H, g) = self.compute_derivatives()
-        num_points = H.shape[0]
         # We're only doing this once, I don't care about speed tricks
         Hinv = np.linalg.inv(H)
         for (i,r) in enumerate(self.rating_history):
@@ -606,13 +600,10 @@ def init_whr(player_db: PlayerDB):
 
 def iterate_whr(player_db: PlayerDB):
     max_change = -1.0
-    max_change_player = None
     for p in player_db.values():
         change = abs(p.iterate_whr())
         if change > max_change:
             max_change = change
-            max_change_player = p
-    # print(f"Most changed player: {p.handle} = {p.latest_rating()}")
     return max_change
 
 def run_whr(player_db: PlayerDB):
@@ -642,7 +633,7 @@ def predict(p1, p2):
     return (p1_rank_str, p1_std, p2_rank_str, p2_std, prob)
 
 def print_report(player_db: PlayerDB, fname: str):
-    with open(fname, "w") as f:
+    with open(fname, "w", encoding="utf-8") as f:
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
             if len(p.rating_history) > 0:
                 print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
@@ -652,9 +643,9 @@ def print_report(player_db: PlayerDB, fname: str):
                       file=f)
 
 def save_rating_history(player_db: PlayerDB, fname: str):
-    with open(fname, "w") as f:
+    with open(fname, "w", encoding="utf-8") as f:
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
-              p.write_rating_history(f)
+            p.write_rating_history(f)
 
 DB_NAME = "whr.db"
 
@@ -727,76 +718,13 @@ def load_yd_ratings(player_db: PlayerDB):
     db_con.commit()
     cur.close()
 
-report_file = "{}-{}".format(args.league, args.report_file)
-
-leagues = args.leagues.split(",")
-
-games: List[Game] = load_games(the_player_db)
-new_games: List[Game] = []
-
-print("Loading YD rating history...", end="", flush=True)
-load_yd_ratings(the_player_db)
-
-if args.parse_seasons:
-    print("Parsing seasons...", end="", flush=True)
-    games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
-    for league in leagues:
-        print("{}...".format(league), end="")
-        these_new_games = parse_seasons(the_player_db,
-                                        league,
-                                        args.parse_season_start,
-                                        games,
-                                        flushed_games)
-        new_games.extend(these_new_games)
-    store_games(games)
-
-print("Storing YD rating history...", end="", flush=True)
-store_yd_ratings(the_player_db)
-
-init_whr(the_player_db)
-
-need_ratings = args.print_report or args.draw_graph or args.draw_graphs or args.whr_vs_yd \
-    or args.predict or args.report or args.changes or args.xtable
-if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
-    print("Loading rating history...", end="", flush=True)
-    load_ratings(the_player_db)
-
-NewGameStats = namedtuple("NewGame", ["p1", "p1_rank_str", "p1_std", "p2", "p2_rank_str", "p2_std", "prob"])
-new_game_stats = []
-
-if new_games and args.note_new_games:
+def update_new_game_stats():
     for g in new_games:
         (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(g.winner, g.loser)
         new_game_stats.append(NewGameStats(p1=g.winner, p1_rank_str=p1_rank_str, p1_std=p1_std,
                                            p2=g.loser, p2_rank_str=p2_rank_str, p2_std=p2_std,
                                            prob=prob))
         # print(f"   {g.winner.handle} ({p1_rank_str} ± {p1_std:.2f}) > {g.loser.handle} ({p2_rank_str} ± {p2_std:.2f}): ({prob*100:.3}% chance)")
-
-if args.analyze_games or args.store_ratings:
-    print("Running WHR...", end="", flush=True)
-    run_whr(the_player_db)
-    store_ratings(the_player_db)
-
-db_con.close()
-
-if new_games and args.note_new_games:
-    print("\nNew games:")
-    for gs in new_game_stats:
-        p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
-        p1_std = gs.p1.latest_std() * RATING_SCALE
-        p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
-        p2_std = gs.p2.latest_std() * RATING_SCALE
-        print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
-        print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
-        #XX print(f"   {gs.p1.handle} ({gs.p1_rank_str} ± {gs.p1_std} -> {p1_rank_str} ± {p1_std}) > ", end="")
-        #XX print(f"{gs.p2.handle} ({gs.p2_rank_str} ± {gs.p2_std} -> {p2_rank_str} ± {p2_std}) ({gs.prob*100}% chance)")
-
-if args.print_report:
-    print("Printing report...", end="", flush=True)
-    print_report(the_player_db, report_file)
-
-# plt.style.use("seaborn-darkgrid")
-sns.set_theme()
 
 def date_str_ticks(dates: List[int]):
     # Put a label just on the middle cycle of each season, unless the player didn't play that one.
@@ -827,7 +755,6 @@ def separate(results: List[Result], delta):
     ok = False
     while not ok:
         ok = True
-        num_clusters = len(clusters)
         last_val = None
         last_date = None
         i = 0
@@ -852,7 +779,7 @@ def separate(results: List[Result], delta):
     for (i, r) in enumerate(results):
         r.sep_rank = vals[i]
 
-if args.draw_graph or args.draw_graphs:
+def do_draw_graphs():
     plot_dir = "plots"
     if not os.path.exists(plot_dir):
         os.mkdir(plot_dir)
@@ -961,7 +888,7 @@ if args.draw_graph or args.draw_graphs:
     plt.tight_layout()
     plt.show()
 
-if args.whr_vs_yd:
+def do_whr_vs_yd():
     players = [p for p in the_player_db.values() if p.include_in_graph()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
@@ -1014,7 +941,7 @@ if args.whr_vs_yd:
     ax.set_ylabel("YD rating")
     plt.show()
 
-if args.predict:
+def do_predict():
     p1_handle = args.predict[0]
     p2_handle = args.predict[1]
     p1 = the_player_db[p1_handle]
@@ -1022,7 +949,7 @@ if args.predict:
     (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(p1, p2)
     print(f"\nThe probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
 
-if args.report:
+def do_report():
     # TODO: combine with whr_vs_yd
     players = [p for p in the_player_db.values() if p.include_in_graph(True)]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
@@ -1056,7 +983,7 @@ if args.report:
 
     plt.show()
 
-if args.changes:
+def do_changes():
     players = [p for p in the_player_db.values() if p.include_in_graph(True)]
     slopes = []
     for p in players:
@@ -1075,7 +1002,7 @@ if args.changes:
     avg_slope = sum(slope for (p, slope) in slopes) / len(slopes)
     print(f"Average slope {avg_slope:.3f}")
 
-if args.xtable:
+def do_xtable():
     players = [p for p in the_player_db.values()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     players.sort(key=lambda p: p.latest_rating(), reverse=True)
@@ -1108,5 +1035,84 @@ if args.xtable:
             else:
                 print("    ", end="")
         print(f"  {wins_vs_stronger:2d}-{losses_vs_stronger:2d} {wins_vs_weaker:2d}-{losses_vs_weaker:2d}")
+
+report_file = "{}-{}".format(args.league, args.report_file)
+
+leagues = args.leagues.split(",")
+
+games: List[Game] = load_games(the_player_db)
+new_games: List[Game] = []
+
+print("Loading YD rating history...", end="", flush=True)
+load_yd_ratings(the_player_db)
+
+if args.parse_seasons:
+    print("Parsing seasons...", end="", flush=True)
+    games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
+    for league in leagues:
+        print("{}...".format(league), end="")
+        these_new_games = parse_seasons(the_player_db,
+                                        league,
+                                        args.parse_season_start,
+                                        games,
+                                        flushed_games)
+        new_games.extend(these_new_games)
+    store_games(games)
+
+print("Storing YD rating history...", end="", flush=True)
+store_yd_ratings(the_player_db)
+
+init_whr(the_player_db)
+
+need_ratings = args.print_report or args.draw_graph or args.draw_graphs or args.whr_vs_yd \
+    or args.predict or args.report or args.changes or args.xtable
+if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
+    print("Loading rating history...", end="", flush=True)
+    load_ratings(the_player_db)
+
+NewGameStats = namedtuple("NewGame", ["p1", "p1_rank_str", "p1_std", "p2", "p2_rank_str", "p2_std", "prob"])
+new_game_stats = []
+
+if new_games and args.note_new_games:
+    update_new_game_stats()
+
+if args.analyze_games or args.store_ratings:
+    print("Running WHR...", end="", flush=True)
+    run_whr(the_player_db)
+    store_ratings(the_player_db)
+
+db_con.close()
+
+if new_games and args.note_new_games:
+    print("\nNew games:")
+    for gs in new_game_stats:
+        p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
+        p1_std = gs.p1.latest_std() * RATING_SCALE
+        p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
+        p2_std = gs.p2.latest_std() * RATING_SCALE
+        print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
+        print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
+        #XX print(f"   {gs.p1.handle} ({gs.p1_rank_str} ± {gs.p1_std} -> {p1_rank_str} ± {p1_std}) > ", end="")
+        #XX print(f"{gs.p2.handle} ({gs.p2_rank_str} ± {gs.p2_std} -> {p2_rank_str} ± {p2_std}) ({gs.prob*100}% chance)")
+
+if args.print_report:
+    print("Printing report...", end="", flush=True)
+    print_report(the_player_db, report_file)
+
+# plt.style.use("seaborn-darkgrid")
+sns.set_theme()
+
+if args.draw_graph or args.draw_graphs:
+    do_draw_graphs()
+if args.whr_vs_yd:
+    do_whr_vs_yd()
+if args.predict:
+    do_predict()
+if args.report:
+    do_report()
+if args.changes:
+    do_changes()
+if args.xtable:
+    do_xtable()
 
 print("Done.")
