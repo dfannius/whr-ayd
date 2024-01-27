@@ -7,6 +7,10 @@ from typing import List, Mapping
 # + Show rating changes for players with new games
 # + Is incremental rating updating working?
 # + Graph multiple players
+# - Store players by ID rather than name
+# - Do clusters by season rather than date
+# - Graph one or more players vs iterations as algorithm runs
+# - Graph all players fitting some criterion (e.g., group)
 # - Anchor players? (e.g., RMeigs)
 # - After loading ratings, set new unpopulated ratings to a good default (most recent)
 # - General cleanup of options and top-level logic now that the DB is working
@@ -14,6 +18,40 @@ from typing import List, Mapping
 #   (The problem is that you can only get historical ratings through the player page)
 # - Check historical prediction accuracy
 # - Smarter choice of what player to update
+
+# Current tables (+ indicates unique):
+#   games
+#     +date INTEGER
+#     +winner TEXT
+#     +loser TEXT
+#   ratings
+#     +player TEXT
+#     +date INTEGER
+#     rating REAL
+#     std REAL
+#   yd_ratings
+#     +player TEXT
+#     +date INTEGER
+#     yd_rating INTEGER
+#
+# New tables:
+#   games
+#     +date INTEGER
+#     +winner_id INTEGER
+#     +loser_id INTEGER
+#   ratings
+#     +player_id INTEGER
+#     +date INTEGER
+#     rating REAL
+#     std REAL
+#   yd_ratings
+#     +player_id INTEGER
+#     +date INTEGER
+#     yd_rating INTEGER
+#   player_ids
+#     +id INTEGER
+#     name TEXT
+
 
 import argparse
 import glob
@@ -310,7 +348,7 @@ class Player:
     def init_rating_history(self):
         if self.root: return
         min_date = min((g.date for g in self.games), default=0)
-        root_date = min_date - 100
+        root_date = min_date - 200
         root_player = self.player_db.get_root_player()
         self.add_game(Game(root_date, self, root_player))
         self.add_game(Game(root_date, root_player, self))
@@ -336,7 +374,7 @@ class Player:
         # The WHR paper expresses w^2 in units of Elo^2/day. The conversion to r^2/month
         # means multiplying by (ln(10) / 400)^2 * 30 ~= 0.001
         # elo_wsq = 100         # I've also tried 300 but this looks good
-        elo_wsq = 50            # but I think this may be even better!
+        elo_wsq = 20            # but I think this may be even better!
         wsq = elo_wsq * 0.001
 
         num_points = len(self.rating_history)
@@ -796,6 +834,8 @@ def do_draw_graphs():
         os.mkdir(plot_dir)
 
     handles = [args.draw_graph] if args.draw_graph else args.draw_graphs
+    multiple_handles = len(handles) > 1
+    draw_names = (not multiple_handles) and args.graph_names
     handle_colors = {}
     last_dates = {}
     last_ranks = {}
@@ -827,7 +867,7 @@ def do_draw_graphs():
                                  alpha=0.2)
             line, = plt.plot(dates, ranks, label=handle)
             handle_colors[handle] = line.get_color()
-        else:
+        elif len(dates) == 1:
             # Special hacky code for when we have only one date, so we don't
             # draw an invisibly thin rectangle.
             plt.xlim(dates[0] - 1, dates[0] + 1)
@@ -846,8 +886,9 @@ def do_draw_graphs():
             line, = plt.plot(plot_dates, plot_ranks, label=handle)
             handle_colors[handle] = line.get_color()
 
-        last_dates[handle] = dates[-1]
-        last_ranks[handle] = ranks[-1]
+        if dates:
+            last_dates[handle] = dates[-1]
+            last_ranks[handle] = ranks[-1]
 
         if args.draw_graph:
             results = sort_results(p.get_results())
@@ -866,7 +907,7 @@ def do_draw_graphs():
                 win_ranks = [rating_to_rank(r) for r in win_ratings]
                 plotted_ranks += win_ranks
                 plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
-                if args.graph_names:
+                if draw_names:
                     for (i, win_handle) in enumerate(win_handles):
                         plt.annotate(win_handle,
                                      xy=(win_dates[i], win_sep_ranks[i]),
@@ -881,7 +922,7 @@ def do_draw_graphs():
                 loss_ranks = [rating_to_rank(r) for r in loss_ratings]
                 plotted_ranks += loss_ranks
                 plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
-                if args.graph_names:
+                if draw_names:
                     for (i, loss_handle) in enumerate(loss_handles):
                         plt.annotate(loss_handle,
                                      xy=(loss_dates[i], loss_sep_ranks[i]),
@@ -895,7 +936,7 @@ def do_draw_graphs():
         cs = [[last_ranks[h], last_ranks[h], last_dates[h], h] for h in handles]
         cs.sort(key=lambda x: (x[2], x[0]))
         clusters = [[c] for c in cs] # (orig_val, new_val, date)
-        clusters = separate_clusters(clusters, 0.1)
+        clusters = separate_clusters(clusters, 0.05)
         vals = list(itertools.chain.from_iterable(clusters))
         for v in vals:
             plt.annotate(v[3],
@@ -1031,18 +1072,18 @@ def do_changes():
     print(f"Average slope {avg_slope:.3f}")
 
 def do_xtable():
-    players = [p for p in the_player_db.values() if p.rating_history[-1].date >= args.min_date]
+    players = [p for p in the_player_db.values() if p.rating_history and p.rating_history[-1].date >= args.min_date]
     players.sort(key=lambda p: p.latest_rating(), reverse=True)
     whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
     print()
     print("                      ", end="")
     for (i, p1) in enumerate(players):
         inits = p1.handle
-        print(f"{inits:3s} ", end="")
+        print(f"{inits[:3]} ", end="")
         p1.inits = inits
     print()
     for (i, p1) in enumerate(players):
-        print(f"{p1.handle:10s} {rank_to_rank_str(whr_ranks[i]):>6s} {p1.inits:3s}", end="")
+        print(f"{p1.handle:10s} {rank_to_rank_str(whr_ranks[i]):>6s} {p1.inits[:3]} ", end="")
         (wins_vs_stronger, losses_vs_stronger, wins_vs_weaker, losses_vs_weaker) = (0, 0, 0, 0)
         for (j, p2) in enumerate(players):
             if p1 == p2:
@@ -1102,6 +1143,8 @@ def run():
 
     if new_games and args.note_new_games:
         new_game_stats = compute_new_game_stats(new_games)
+        num_games_str = "1 new game" if len(new_games) == 1 else f"{len(new_games)} new games"
+        print(f"Processing {num_games_str}...", end="", flush=True)
 
     if args.analyze_games or args.store_ratings:
         print("Running WHR...", end="", flush=True)
