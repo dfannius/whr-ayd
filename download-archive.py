@@ -58,5 +58,5 @@ with urllib.request.urlopen(archive_url) as response:
 for cycle_url in cycle_urls:
     out_fn = "{}/{:03d}-{}-overview.html".format(dir, cycle_url.date, cycle_url.id)
     in_fn = "https://{}.yunguseng.com{}".format(args.league, cycle_url.url)
-    print("{} -> {}".format(in_fn, out_fn))
+    print("Downloading {} to {}".format(in_fn, out_fn))
     urllib.request.urlretrieve(in_fn, out_fn)

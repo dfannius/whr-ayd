@@ -1,5 +1,5 @@
 from collections import namedtuple
-from typing import List, Mapping
+from typing import Dict, List, Mapping, Optional
 
 # TODO
 # + Predict result of game
@@ -7,8 +7,11 @@ from typing import List, Mapping
 # + Show rating changes for players with new games
 # + Is incremental rating updating working?
 # + Graph multiple players
-# - Store players by ID rather than name
-# - Do clusters by season rather than date
+# + Store players by ID rather than name
+# + Case-insensitive handle lookup
+# - List all games by a player
+# - Make handle lookup faster? Not really necessary right now
+# - Do visual clusters in graph by season rather than date
 # - Graph one or more players vs iterations as algorithm runs
 # - Graph all players fitting some criterion (e.g., group)
 # - Anchor players? (e.g., RMeigs)
@@ -52,6 +55,7 @@ from typing import List, Mapping
 #     +id INTEGER
 #     name TEXT
 
+ROOT_PLAYER_ID = -1
 
 import argparse
 import glob
@@ -186,7 +190,7 @@ class RatingDatum:
         return "{}: {}".format(self.date, rating_to_rank_str(self.rating))
 
 class Result:
-    def __init__(self, date, handle, rating, won):
+    def __init__(self, date: int, handle: str, rating: float, won: bool):
         self.date: int = date        # date of game
         self.handle: str = handle    # handle of opponent
         self.rating: float = rating    # rating of opponent at that time
@@ -195,10 +199,11 @@ class Result:
         self.won: bool = won          # whether we beat them
 
 class Player:
-    def __init__(self, handle, player_db, is_root: bool = False):
+    def __init__(self, player_id, handle, player_db, is_root: bool = False):
+        self.player_id: str = player_id
         self.handle: str = handle
         self.games: List[Game] = []
-        self.yd_ratings: Mapping[int, int] = {} # key is date
+        self.yd_ratings: Dict[int, int] = {} # key is date
         self.rating_history: List[RatingDatum] = []
         self.player_db: PlayerDB = player_db
         self.root: bool = is_root
@@ -225,7 +230,7 @@ class Player:
         if require_both_results and (len(self.get_wins()) == 0 or len(self.get_losses()) == 0):
             return False
         if self.handle == "Chimin": return False
-        if self.handle == "RMeigs": return False # throws YD calculations off too much
+#       if self.handle == "RMeigs": return False # throws YD calculations off too much
         return True
 
     def write_rating_history(self, f):
@@ -306,7 +311,7 @@ class Player:
         for r in self.rating_history:
             for w in r.wins:
                 if not w.root:
-                    results.append((r.date, w.handle, w.get_rating(r.date)))
+                    results.append(Result(r.date, w.handle, w.get_rating(r.date), True))
         return results
 
     def get_losses(self) -> List[Result]:
@@ -314,7 +319,7 @@ class Player:
         for r in self.rating_history:
             for l in r.losses:
                 if not l.root:
-                    results.append((r.date, l.handle, l.get_rating(r.date)))
+                    results.append(Result(r.date, l.handle, l.get_rating(r.date), False))
         return results
 
     def get_wl_vs(self, other_player):
@@ -437,7 +442,7 @@ class Player:
             r.rating -= x[i]
             r.gamma = r_to_gamma(r.rating)
 
-        return np.linalg.norm(x)
+        return float(np.linalg.norm(x))
 
     # Return list of std deviation at each rating point
     def compute_stds(self):
@@ -462,33 +467,44 @@ class Game:
         return "{:02}: {} > {}".format(self.date, self.winner, self.loser)
 
 class PlayerDB:
-    def __init__(self):
-        self.player_map: Mapping[str, Player] = {}
-        self.root_player: Player = self.get_player("[root]", is_root=True)
+    def __init__(self) -> None:
+        self.player_map: Dict[int, Player] = {}
+        self.root_player: Player = self.get_player(ROOT_PLAYER_ID, "[root]", is_root=True)
 
-    def get_player(self, handle: str, is_root=False) -> Player:
-        if handle in self.player_map:
-            player = self.player_map[handle]
+    def get_player(self, player_id: int, handle: Optional[str]=None, is_root=False) -> Player:
+        if player_id in self.player_map:
+            player = self.player_map[player_id]
+            if handle is not None:
+                if player.handle is not None and player.handle != handle:
+                    print(f"Player {player_id} was {player.handle}, now {handle}")
+                    player.handle = handle
             return player
         else:
-            player = Player(handle, self, is_root)
-            self.player_map[handle] = player
+            player = Player(player_id, handle, self, is_root)
+            self.player_map[player_id] = player
             return player
+
+    def get_player_by_handle(self, handle:str) -> Player:
+        h = handle.casefold()
+        for p in self.player_map.values():
+            if p.handle.casefold() == h:
+                return p
+        raise Exception(f"Couldn't find {handle}")
 
     def get_root_player(self) -> Player:
         return self.root_player
 
     def copy_rating_history_from(self, other_db: "PlayerDB"):
-        for (handle, player) in self.player_map.items():
-            if handle in other_db.player_map:
-                player.copy_rating_history_from(other_db.player_map[handle])
+        for (player_id, player) in self.player_map.items():
+            if player_id in other_db.player_map:
+                player.copy_rating_history_from(other_db.player_map[player_id])
 
     def remove_recent_games(self, start_date: int):
         for p in self.player_map.values():
             p.remove_recent_games(start_date)
 
-    def __getitem__(self, handle: str) -> Player:
-        return self.player_map[handle]
+    def __getitem__(self, player_id: int) -> Player:
+        return self.player_map[player_id]
 
     def __len__(self) -> int:
         return len(self.player_map)
@@ -497,7 +513,7 @@ class PlayerDB:
         self.player_map.clear()
 
     def values(self) -> List[Player]:
-        return self.player_map.values()
+        return list(self.player_map.values())
 
 the_player_db = PlayerDB()
 
@@ -540,7 +556,7 @@ def parse_seasons(player_db: PlayerDB,
     # An overview file may contain all three cycles of a season (AYD,
     # early EYD seasons) or a single cycle (late EYD seasons).
     overview_files = glob.glob("{}-overviews/*-overview.html".format(league))
-    overview_file_array: List[[List[str]]] = []
+    overview_file_array: List[List[str]] = []
     overview_file_re = re.compile(r"(\d+)-([^-]*)-overview.html")
     for fn in overview_files:
         match = re.search(overview_file_re, fn)
@@ -599,10 +615,15 @@ def parse_seasons(player_db: PlayerDB,
                             #XX name = tds[1].nobr.a.contents[0]
                             #XX handle = tds[2].contents[0]
                             handle = tds[1].a.contents[0]
+                            m = re.search(r'id=(\d+)', tds[1].a.get('href'))
+                            if m:
+                                player_id = int(m.group(1))
+                            else:
+                                raise Exception(f"Couldn't find player_id for {handle}")
                             #XX print(handle)
                             #XX yd_rating = int(tds[11].contents[0])
                             yd_rating = int(tds[-1].contents[0])
-                            player = player_db.get_player(handle)
+                            player = player_db.get_player(player_id, handle)
                             player.set_yd_rating(date, yd_rating)
                             crosstable_players.append(player)
 
@@ -692,15 +713,9 @@ DB_NAME = "whr.db"
 
 db_con = sqlite3.connect(DB_NAME)
 
-def make_db():
-    cur = db_con.cursor()
-    cur.execute("CREATE TABLE games(date, winner, loser, UNIQUE(date, winner, loser))")
-    db_con.commit()
-    cur.close()
-
 def store_games(games: List[Game]):
     cur = db_con.cursor()
-    data = [ (g.date, g.winner.handle, g.loser.handle) for g in games ]
+    data = [ (g.date, g.winner.player_id, g.loser.player_id) for g in games ]
     cur.executemany("INSERT OR REPLACE INTO games VALUES(?, ?, ?)", data)
     db_con.commit()
     cur.close()
@@ -710,9 +725,10 @@ def load_games(player_db: PlayerDB) -> List[Game]:
     cur = db_con.cursor()
     cur.execute("SELECT * from games")
     rows = cur.fetchall()
-    for (date, winner, loser) in rows:
-        winner = player_db.get_player(winner)
-        loser = player_db.get_player(loser)
+    for (date, winner_id, loser_id) in rows:
+        winner = player_db.get_player(winner_id)
+        loser = player_db.get_player(loser_id)
+        # print(f"{date} {winner_id} {winner.handle} > {loser_id} {loser.handle}")
         game = Game(date, winner, loser)
         games.append(game)
         winner.add_game(game)
@@ -723,7 +739,7 @@ def load_games(player_db: PlayerDB) -> List[Game]:
 
 def store_ratings(player_db: PlayerDB):
     cur = db_con.cursor()
-    data = [ (p.handle, r.date, r.rating, r.std) for p in player_db.values() for r in p.rating_history ]
+    data = [ (p.player_id, r.date, r.rating, r.std) for p in player_db.values() for r in p.rating_history ]
     cur.executemany("INSERT OR REPLACE INTO ratings VALUES(?, ?, ?, ?)", data)
     db_con.commit()
     cur.close()
@@ -733,8 +749,8 @@ def load_ratings(player_db: PlayerDB):
     cur = db_con.cursor()
     cur.execute("SELECT * from ratings")
     rows = cur.fetchall()
-    for (player, date, rating, std) in rows:
-        p = old_player_db.get_player(player)
+    for (player_id, date, rating, std) in rows:
+        p = old_player_db.get_player(player_id)
         p.add_rating(date, rating, std)
     for player in old_player_db.values():
         player.hash_ratings()
@@ -744,7 +760,7 @@ def load_ratings(player_db: PlayerDB):
 
 def store_yd_ratings(player_db: PlayerDB):
     cur = db_con.cursor()
-    data = [ (p.handle, date, yd_rating) for p in player_db.values() for (date, yd_rating) in p.yd_ratings.items() ]
+    data = [ (p.player_id, date, yd_rating) for p in player_db.values() for (date, yd_rating) in p.yd_ratings.items() ]
     cur.executemany("INSERT OR REPLACE INTO yd_ratings VALUES(?, ?, ?)", data)
     db_con.commit()
     cur.close()
@@ -753,13 +769,30 @@ def load_yd_ratings(player_db: PlayerDB):
     cur = db_con.cursor()
     cur.execute("SELECT * from yd_ratings")
     rows = cur.fetchall()
-    for (player, date, yd_rating) in rows:
-        p = player_db.get_player(player)
+    for (player_id, date, yd_rating) in rows:
+        p = player_db.get_player(player_id)
         p.set_yd_rating(date, yd_rating)
     db_con.commit()
     cur.close()
 
-NewGameStats = namedtuple("NewGame", ["p1", "p1_rank_str", "p1_std", "p2", "p2_rank_str", "p2_std", "prob"])
+def store_ids(player_db: PlayerDB):
+    cur = db_con.cursor()
+    data = [ (p.player_id, p.handle) for p in player_db.values() ]
+    cur.executemany("INSERT OR REPLACE INTO ids VALUES(?, ?)", data)
+    db_con.commit()
+    cur.close()
+
+def load_ids(player_db: PlayerDB):
+    cur = db_con.cursor()
+    cur.execute("SELECT * from ids")
+    rows = cur.fetchall()
+    for (player_id, handle) in rows:
+        p = player_db.get_player(player_id, handle)
+        # print(f"{player_id} {handle}")
+    db_con.commit()
+    cur.close()
+
+NewGameStats = namedtuple("NewGameStats", ["p1", "p1_rank_str", "p1_std", "p2", "p2_rank_str", "p2_std", "prob"])
 
 def compute_new_game_stats(new_games: List[Game]):
     new_game_stats = []
@@ -848,7 +881,7 @@ def do_draw_graphs():
         plt.title("\n" + args.draw_graph + "\n")
 
     for handle in handles:
-        p = the_player_db[handle]
+        p = the_player_db.get_player_by_handle(handle)
         history = p.rating_history[1:]
         dates = [r.date for r in history]
         all_dates = list(set(all_dates + dates))
@@ -983,7 +1016,7 @@ def do_whr_vs_yd():
     ax.set_xticks(tick_vals)
     ax.set_xticklabels(tick_labels)
 
-    callout = the_player_db["dfan"]              # player to highlight
+    callout = None
     if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_latest_yd_rating()])
 
     # ax.plot(whr_ranks,
@@ -1015,8 +1048,8 @@ def do_whr_vs_yd():
 def do_predict():
     p1_handle = args.predict[0]
     p2_handle = args.predict[1]
-    p1 = the_player_db[p1_handle]
-    p2 = the_player_db[p2_handle]
+    p1 = the_player_db.get_player_by_handle(p1_handle)
+    p2 = the_player_db.get_player_by_handle(p2_handle)
     (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(p1, p2)
     print(f"\nThe probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
 
@@ -1104,11 +1137,15 @@ def do_xtable():
                 print("    ", end="")
         print(f"  {wins_vs_stronger:2d}-{losses_vs_stronger:2d} {wins_vs_weaker:2d}-{losses_vs_weaker:2d}")
 
-def run():
+def run() -> None:
     report_file = "{}-{}".format(args.league, args.report_file)
 
     leagues = args.leagues.split(",")
 
+    print("Loading ids...", end="", flush=True)
+    load_ids(the_player_db)
+
+    print("Loading games...", end="", flush=True)
     games: List[Game] = load_games(the_player_db)
     new_games: List[Game] = []
 
@@ -1127,6 +1164,9 @@ def run():
                                             flushed_games)
             new_games.extend(these_new_games)
         store_games(games)
+
+    print("Storing ids...", end="", flush=True)
+    store_ids(the_player_db)
 
     print("Storing YD rating history...", end="", flush=True)
     store_yd_ratings(the_player_db)

@@ -1,0 +1,4 @@
+#!/bin/bash
+rm whr.db
+python3 create_tables.py
+python3 whr.py --leagues ayd,eyd --load-ratings --parse-seasons --parse-season-start 1 --analyze-games
