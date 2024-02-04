@@ -9,7 +9,9 @@ from typing import Dict, List, Mapping, Optional
 # + Graph multiple players
 # + Store players by ID rather than name
 # + Case-insensitive handle lookup
-# - List all games by a player
+# + List all games by a player
+# - Always load data, no reason not to
+# - Remove obsolete command-line options
 # - Make handle lookup faster? Not really necessary right now
 # - Do visual clusters in graph by season rather than date
 # - Graph one or more players vs iterations as algorithm runs
@@ -113,6 +115,8 @@ parser.add_argument("--store-ratings", action="store_true", default=False,
                     help="Store all ratings to DB")
 parser.add_argument("--load-ratings", action="store_true", default=False,
                     help="Load ratings from DB")
+parser.add_argument("--list-games", type=str, default=None, metavar="H",
+                    help="List the games of a player")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
@@ -464,7 +468,7 @@ class Game:
                 self.loser == other.loser)
 
     def __repr__(self):
-        return "{:02}: {} > {}".format(self.date, self.winner, self.loser)
+        return "{:03}: {} > {}".format(self.date, self.winner, self.loser)
 
 class PlayerDB:
     def __init__(self) -> None:
@@ -861,6 +865,23 @@ def separate(results: List[Result], delta):
     for (i, r) in enumerate(results):
         r.sep_rank = vals[i]
 
+def draw_opponents(games, color, draw_names, plotted_ranks):
+    if len(games) > 0:
+        dates = [w.date for w in games]
+        handles = [w.handle for w in games]
+        ratings = [w.rating for w in games]
+        sep_ranks = [w.sep_rank for w in games]
+        ranks = [rating_to_rank(r) for r in ratings]
+        plotted_ranks += ranks
+        plt.scatter(dates, ranks, edgecolors=color, facecolors="none", marker="o")
+        if draw_names:
+            for (i, handle) in enumerate(handles):
+                plt.annotate(handle,
+                             xy=(dates[i], sep_ranks[i]),
+                             xytext=(5, 0),
+                             textcoords="offset points",
+                             fontsize="x-small", verticalalignment="center", color=color)
+
 def do_draw_graphs():
     plot_dir = "plots"
     if not os.path.exists(plot_dir):
@@ -931,37 +952,8 @@ def do_draw_graphs():
             separate(results, rating_spread / 50)
             wins = [r for r in results if r.won]
             losses = [r for r in results if not r.won]
-
-            if len(wins) > 0:
-                win_dates = [w.date for w in wins]
-                win_handles = [w.handle for w in wins]
-                win_ratings = [w.rating for w in wins]
-                win_sep_ranks = [w.sep_rank for w in wins]
-                win_ranks = [rating_to_rank(r) for r in win_ratings]
-                plotted_ranks += win_ranks
-                plt.scatter(win_dates, win_ranks, edgecolors="green", facecolors="none", marker="o")
-                if draw_names:
-                    for (i, win_handle) in enumerate(win_handles):
-                        plt.annotate(win_handle,
-                                     xy=(win_dates[i], win_sep_ranks[i]),
-                                     xytext=(5, 0),
-                                     textcoords="offset points",
-                                     fontsize="x-small", verticalalignment="center", color="green")
-            if len(losses) > 0:
-                loss_dates = [l.date for l in losses]
-                loss_handles = [l.handle for l in losses]
-                loss_ratings = [l.rating for l in losses]
-                loss_sep_ranks = [l.sep_rank for l in losses]
-                loss_ranks = [rating_to_rank(r) for r in loss_ratings]
-                plotted_ranks += loss_ranks
-                plt.scatter(loss_dates, loss_ranks, color="red", marker="x")
-                if draw_names:
-                    for (i, loss_handle) in enumerate(loss_handles):
-                        plt.annotate(loss_handle,
-                                     xy=(loss_dates[i], loss_sep_ranks[i]),
-                                     xytext=(5, 0),
-                                     textcoords="offset points",
-                                     fontsize="x-small", verticalalignment="center", color="red")
+            draw_opponents(wins, "green", draw_names, plotted_ranks)
+            draw_opponents(losses, "red", draw_names, plotted_ranks)
 
         all_plotted_ranks += plotted_ranks
 
@@ -995,6 +987,17 @@ def do_draw_graphs():
     plt.savefig("{}/{}.png".format(plot_dir, handle))
     plt.tight_layout()
     plt.show()
+
+def do_list_games():
+    p = the_player_db.get_player_by_handle(args.list_games)
+    for g in p.games:
+        if g.winner.root or g.loser.root: continue
+        w_rating = rating_to_rank_str(g.winner.get_rating_fast(g.date))
+        l_rating = rating_to_rank_str(g.loser.get_rating_fast(g.date))
+        if g.winner == p:
+            print(f"{g.date:3}: {w_rating} W {g.loser.handle:10} ({l_rating})")
+        else:
+            print(f"{g.date:3}: {l_rating} l {g.winner.handle:10} ({w_rating})")
 
 def do_whr_vs_yd():
     players = [p for p in the_player_db.values() if p.include_in_graph()]
@@ -1174,7 +1177,7 @@ def run() -> None:
     init_whr(the_player_db)
 
     need_ratings = args.print_report or args.draw_graph or args.draw_graphs or args.whr_vs_yd \
-        or args.predict or args.report or args.changes or args.xtable
+        or args.predict or args.report or args.changes or args.xtable or args.list_games
     if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
         print("Loading rating history...", end="", flush=True)
         load_ratings(the_player_db)
@@ -1202,8 +1205,6 @@ def run() -> None:
             p2_std = gs.p2.latest_std() * RATING_SCALE
             print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
             print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
-            #XX print(f"   {gs.p1.handle} ({gs.p1_rank_str} ± {gs.p1_std} -> {p1_rank_str} ± {p1_std}) > ", end="")
-            #XX print(f"{gs.p2.handle} ({gs.p2_rank_str} ± {gs.p2_std} -> {p2_rank_str} ± {p2_std}) ({gs.prob*100}% chance)")
 
     if args.print_report:
         print("Printing report...", end="", flush=True)
@@ -1214,6 +1215,8 @@ def run() -> None:
 
     if args.draw_graph or args.draw_graphs:
         do_draw_graphs()
+    if args.list_games:
+        do_list_games()
     if args.whr_vs_yd:
         do_whr_vs_yd()
     if args.predict:
