@@ -10,8 +10,9 @@ from typing import Dict, List, Mapping, Optional
 # + Store players by ID rather than name
 # + Case-insensitive handle lookup
 # + List all games by a player
-# - Always load data, no reason not to
+# + Always load data, no reason not to
 # - Remove obsolete command-line options
+#   - Is --league / --leagues still useful?
 # - Make handle lookup faster? Not really necessary right now
 # - Do visual clusters in graph by season rather than date
 # - Graph one or more players vs iterations as algorithm runs
@@ -109,12 +110,6 @@ parser.add_argument("--changes", action="store_true", default=False,
                     help="Produce report on ratings changes")
 parser.add_argument("--xtable", action="store_true", default=False,
                     help="Produce crosstable report")
-parser.add_argument("--store-games", action="store_true", default=False,
-                    help="Store all games to DB")
-parser.add_argument("--store-ratings", action="store_true", default=False,
-                    help="Store all ratings to DB")
-parser.add_argument("--load-ratings", action="store_true", default=False,
-                    help="Load ratings from DB")
 parser.add_argument("--list-games", type=str, default=None, metavar="H",
                     help="List the games of a player")
 
@@ -1176,11 +1171,8 @@ def run() -> None:
 
     init_whr(the_player_db)
 
-    need_ratings = args.print_report or args.draw_graph or args.draw_graphs or args.whr_vs_yd \
-        or args.predict or args.report or args.changes or args.xtable or args.list_games
-    if args.load_ratings or (need_ratings and not args.analyze_games) or (new_games and args.note_new_games):
-        print("Loading rating history...", end="", flush=True)
-        load_ratings(the_player_db)
+    print("Loading rating history...", end="", flush=True)
+    load_ratings(the_player_db)
 
     new_game_stats = []
 
@@ -1189,7 +1181,7 @@ def run() -> None:
         num_games_str = "1 new game" if len(new_games) == 1 else f"{len(new_games)} new games"
         print(f"Processing {num_games_str}...", end="", flush=True)
 
-    if args.analyze_games or args.store_ratings:
+    if args.analyze_games:
         print("Running WHR...", end="", flush=True)
         run_whr(the_player_db)
         store_ratings(the_player_db)
