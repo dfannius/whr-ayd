@@ -11,6 +11,11 @@ from typing import Dict, List, Mapping, Optional
 # + Case-insensitive handle lookup
 # + List all games by a player
 # + Always load data, no reason not to
+# + Ranks on graph axes should be between ticks, not on them
+#   + graph
+#   + report
+#   + whr-vs-yd
+# - Refactor axis-labels-between-ticks code
 # - Remove obsolete command-line options
 #   - Is --league / --leagues still useful?
 # - Make handle lookup faster? Not really necessary right now
@@ -143,6 +148,18 @@ def rank_to_rank_str(rank, integral=False):
         return dan_fmt.format(rank)
     else:
         return kyu_fmt.format(2-rank)
+
+def rank_to_rank_str_tick(rank):
+    """Return the appropriate string to label a range between ticks."""
+    r = rank
+    if r > 0: r += 1
+    r = int(r)
+    if r >= 1:
+        ans = f"{r}d"
+    else:
+        ans = f"{1-r}k"
+    # print(f"{rank} -> {ans}")
+    return ans
 
 def rating_to_rank_str(raw_r):
     """Return the string representation of a raw rating."""
@@ -977,6 +994,17 @@ def do_draw_graphs():
     new_tick_labels = [rank_to_rank_str(r, True) for r in new_tick_vals]
     plt.yticks(new_tick_vals, new_tick_labels)
     plt.xticks(all_dates, date_str_ticks(all_dates))
+
+    # Remove old labels and redraw new ones between ticks
+    plt.gca().tick_params(axis='y', which='both', left=False, right=False, labelleft=False)
+    new_tick_vals = [y - 0.5 for y in new_tick_vals][1:]
+    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
+    xlim = plt.gca().get_xlim()
+    for position, label in zip(new_tick_vals, new_tick_labels):
+        plt.text(xlim[0] - 0.05 * (xlim[1] - xlim[0]),
+                 position,
+                 label, rotation=0, ha='center', va='top')
+
     plt.xlabel("Season")
     plt.ylabel("Rank")
     plt.savefig("{}/{}.png".format(plot_dir, handle))
@@ -990,9 +1018,9 @@ def do_list_games():
         w_rating = rating_to_rank_str(g.winner.get_rating_fast(g.date))
         l_rating = rating_to_rank_str(g.loser.get_rating_fast(g.date))
         if g.winner == p:
-            print(f"{g.date:3}: {w_rating} W {g.loser.handle:10} ({l_rating})")
+            print(f"{g.date:3}: {w_rating} W   {g.loser.handle:10} ({l_rating})")
         else:
-            print(f"{g.date:3}: {l_rating} l {g.winner.handle:10} ({w_rating})")
+            print(f"{g.date:3}: {l_rating}   l {g.winner.handle:10} ({w_rating})")
 
 def do_whr_vs_yd():
     players = [p for p in the_player_db.values() if p.include_in_graph()]
@@ -1014,6 +1042,15 @@ def do_whr_vs_yd():
     ax.set_xticks(tick_vals)
     ax.set_xticklabels(tick_labels)
 
+    plt.gca().tick_params(axis='x', which='both', labelbottom=False)
+    new_tick_vals = [x - 0.5 for x in tick_vals][1:]
+    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
+    ylim = plt.gca().get_ylim()
+    for position, label in zip(new_tick_vals, new_tick_labels):
+        plt.text(position,
+                 ylim[0] - 0.05 * (ylim[1] - ylim[0]),
+                 label, rotation=0, ha='center', va='top')
+
     callout = None
     if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_latest_yd_rating()])
 
@@ -1029,7 +1066,13 @@ def do_whr_vs_yd():
         if abs_devs[i] >= dev_cutoff or p == callout:
             # print("{} is {}, should be {} to {} ".format(p.handle, yd_ratings[i], int(-deltas[i]),
             #                                             int(yd_ratings[i] - deltas[i])))
-            ax.scatter([whr_ranks[i]], [yd_ratings[i]], s=4, c="orange")
+            if p == callout:
+                color = "yellow"
+            elif deltas[i] < 0:
+                color = "orange"
+            else:
+                color= "red"
+            ax.scatter([whr_ranks[i]], [yd_ratings[i]], s=4, c=color)
             xytext = (-5,-5) if deltas[i] > 0 else (5,-5)
             horizontalalignment = "right" if deltas[i] > 0 else "left"
             ax.annotate(p.handle,
@@ -1080,6 +1123,15 @@ def do_report():
     tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
     ax.set_xticks(tick_vals)
     ax.set_xticklabels(tick_labels)
+
+    plt.gca().tick_params(axis='x', which='both', labelbottom=False)
+    new_tick_vals = [x - 0.5 for x in tick_vals][1:]
+    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
+    ylim = plt.gca().get_ylim()
+    for position, label in zip(new_tick_vals, new_tick_labels):
+        plt.text(position,
+                 ylim[0] - 0.05 * (ylim[1] - ylim[0]),
+                 label, rotation=0, ha='center', va='top')
 
     plt.show()
 
@@ -1140,14 +1192,14 @@ def run() -> None:
 
     leagues = args.leagues.split(",")
 
-    print("Loading ids...", end="", flush=True)
+    # print("Loading ids...", end="", flush=True)
     load_ids(the_player_db)
 
-    print("Loading games...", end="", flush=True)
+    # print("Loading games...", end="", flush=True)
     games: List[Game] = load_games(the_player_db)
     new_games: List[Game] = []
 
-    print("Loading YD rating history...", end="", flush=True)
+    # print("Loading YD rating history...", end="", flush=True)
     load_yd_ratings(the_player_db)
 
     if args.parse_seasons:
@@ -1163,15 +1215,15 @@ def run() -> None:
             new_games.extend(these_new_games)
         store_games(games)
 
-    print("Storing ids...", end="", flush=True)
+    # print("Storing ids...", end="", flush=True)
     store_ids(the_player_db)
 
-    print("Storing YD rating history...", end="", flush=True)
+    # print("Storing YD rating history...", end="", flush=True)
     store_yd_ratings(the_player_db)
 
     init_whr(the_player_db)
 
-    print("Loading rating history...", end="", flush=True)
+    # print("Loading rating history...", end="", flush=True)
     load_ratings(the_player_db)
 
     new_game_stats = []
@@ -1184,12 +1236,14 @@ def run() -> None:
     if args.analyze_games:
         print("Running WHR...", end="", flush=True)
         run_whr(the_player_db)
+        # print("Storing rating history...", end="", flush=True)
         store_ratings(the_player_db)
+        print("Done.")
 
     db_con.close()
 
     if new_games and args.note_new_games:
-        print("\nNew games:")
+        print("New games:")
         for gs in new_game_stats:
             p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
             p1_std = gs.p1.latest_std() * RATING_SCALE
@@ -1219,7 +1273,5 @@ def run() -> None:
         do_changes()
     if args.xtable:
         do_xtable()
-
-    print("Done.")
 
 run()
