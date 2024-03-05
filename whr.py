@@ -15,7 +15,13 @@ from typing import Dict, List, Mapping, Optional
 #   + graph
 #   + report
 #   + whr-vs-yd
-# - Refactor axis-labels-between-ticks code
+# + Refactor axis-labels-between-ticks code
+# + Suppress wild swings while running algorithm so we can move the root games way back
+# + In graphs, draw dotted lines or something during inactivity
+# + Check historical prediction accuracy
+# - Give rank (not rating) credit for games played, somehow
+# - Why do I need RATING_FACTOR at all?
+# - Don't draw ranks outside graph
 # - Remove obsolete command-line options
 #   - Is --league / --leagues still useful?
 # - Make handle lookup faster? Not really necessary right now
@@ -24,44 +30,9 @@ from typing import Dict, List, Mapping, Optional
 # - Graph all players fitting some criterion (e.g., group)
 # - Anchor players? (e.g., RMeigs)
 # - After loading ratings, set new unpopulated ratings to a good default (most recent)
-# - General cleanup of options and top-level logic now that the DB is working
 # - Get historical YD ratings again
 #   (The problem is that you can only get historical ratings through the player page)
-# - Check historical prediction accuracy
 # - Smarter choice of what player to update
-
-# Current tables (+ indicates unique):
-#   games
-#     +date INTEGER
-#     +winner TEXT
-#     +loser TEXT
-#   ratings
-#     +player TEXT
-#     +date INTEGER
-#     rating REAL
-#     std REAL
-#   yd_ratings
-#     +player TEXT
-#     +date INTEGER
-#     yd_rating INTEGER
-#
-# New tables:
-#   games
-#     +date INTEGER
-#     +winner_id INTEGER
-#     +loser_id INTEGER
-#   ratings
-#     +player_id INTEGER
-#     +date INTEGER
-#     rating REAL
-#     std REAL
-#   yd_ratings
-#     +player_id INTEGER
-#     +date INTEGER
-#     yd_rating INTEGER
-#   player_ids
-#     +id INTEGER
-#     name TEXT
 
 ROOT_PLAYER_ID = -1
 
@@ -117,13 +88,20 @@ parser.add_argument("--xtable", action="store_true", default=False,
                     help="Produce crosstable report")
 parser.add_argument("--list-games", type=str, default=None, metavar="H",
                     help="List the games of a player")
+parser.add_argument("--prob-report", action="store_true", default=False,
+                    help="Report on games' win probabilities")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
     args.leagues = args.league
 
-RATING_SCALE = 1.5
-RATING_SHIFT = -1.2
+# I need to multiply rating differences by this much for predictions to be most accurate
+RATING_FACTOR = 1.3
+# RATING_FACTOR = 1.0
+
+# For converting to AGA-ish ratings
+RATING_SCALE = 1.4
+RATING_SHIFT = -0.2
 
 def rating_to_rank(raw_r):
     """Convert a raw (internal) rating to something more AGA-like."""
@@ -299,13 +277,19 @@ class Player:
                 return r.std
         return 10                # If no ratings, we don't know anything
 
-    def get_rating_fast(self, date) -> float:
+    def get_std(self, date: int) -> float:
+        for r in reversed(self.rating_history):
+            if r.date == date and r.std != 0:
+                return r.std
+        return 10                # If no ratings, we don't know anything
+
+    def get_rating_fast(self, date: int) -> float:
         if self.root:
             return 0
         else:
             return self.rating_hash[date].rating
 
-    def get_gamma_fast(self, date) -> float:
+    def get_gamma_fast(self, date: int) -> float:
         if self.root:
             return 1
         else:
@@ -369,7 +353,9 @@ class Player:
     def init_rating_history(self):
         if self.root: return
         min_date = min((g.date for g in self.games), default=0)
-        root_date = min_date - 200
+        # Add a virtual win and loss in the ancient past against a seed player
+        # to avoid degenerate situations
+        root_date = min_date - 2000
         root_player = self.player_db.get_root_player()
         self.add_game(Game(root_date, self, root_player))
         self.add_game(Game(root_date, root_player, self))
@@ -425,7 +411,7 @@ class Player:
         return (H, g)
 
     # Return magnitude of changes
-    def iterate_whr(self) -> float:
+    def iterate_whr(self, n: int) -> float:
         # print(f"iterate_whr {self.handle}")
         if self.root: return 0.0
 
@@ -455,6 +441,10 @@ class Player:
             x[i] = (y[i] - b[i] * x[i+1]) / d[i]
 
         for (i,r) in enumerate(self.rating_history):
+            if abs(x[i]) >= 1:
+                print(f"{n}: {self.handle} @ {r.date} changed by {-x[i]:.3f} from {r.rating:.3f}")
+            if x[i] > 1.0: x[i] = 1.0
+            elif x[i] < -1.0: x[i] = -1.0
             r.rating -= x[i]
             r.gamma = r_to_gamma(r.rating)
 
@@ -674,12 +664,12 @@ def init_whr(player_db: PlayerDB):
     for p in player_db.values():
         p.init_rating_history()
 
-def iterate_whr(player_db: PlayerDB):
+def iterate_whr(player_db: PlayerDB, n: int):
     max_change = -1.0
     players = list(player_db.values())
     random.shuffle(players)
     for p in players:
-        change = abs(p.iterate_whr())
+        change = abs(p.iterate_whr(n))
         if change > max_change:
             max_change = change
     return max_change
@@ -689,7 +679,7 @@ def run_whr(player_db: PlayerDB):
         if (i+1) % 100 == 0:
             print("{}...".format(i+1), end="", flush=True)
             # print("ITERATION {}".format(i))
-        max_change = iterate_whr(player_db)
+        max_change = iterate_whr(player_db, i)
         if max_change < 1e-05:
             print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""),
                   end="", flush=True)
@@ -697,8 +687,8 @@ def run_whr(player_db: PlayerDB):
     for p in player_db.values():
         p.compute_stds()
 
-def predict(p1, p2):
-    mu_diff = p1.latest_rating() - p2.latest_rating()
+def predict(p1: Player, p2: Player):
+    mu_diff = (p1.latest_rating() - p2.latest_rating()) * RATING_FACTOR
     var = p1.latest_std() ** 2 + p2.latest_std() ** 2
     if var == 0:
         print( f"{p1.handle} and {p2.handle} have no variance!" )
@@ -709,6 +699,22 @@ def predict(p1, p2):
     p2_rank_str = rating_to_rank_str(p2.latest_rating())
     p2_std = p2.latest_std() * RATING_SCALE
     return (p1_rank_str, p1_std, p2_rank_str, p2_std, prob)
+
+def predict_game(g: Game):
+    w = g.winner
+    l = g.loser
+    d = g.date
+    rw = w.get_rating_fast(d)
+    rl = l.get_rating_fast(d)
+    sw = w.get_std(d)
+    sl = l.get_std(d)
+    mu_diff = (rw - rl) * RATING_FACTOR
+    var = sw ** 2 + sl ** 2
+    if var == 0:
+        print( f"{w.handle} and {l.handle} have no variance at {d}!" )
+        var = 2
+    prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
+    return prob
 
 def print_report(player_db: PlayerDB, fname: str):
     with open(fname, "w", encoding="utf-8") as f:
@@ -894,6 +900,54 @@ def draw_opponents(games, color, draw_names, plotted_ranks):
                              textcoords="offset points",
                              fontsize="x-small", verticalalignment="center", color=color)
 
+def label_ranks_x(tick_vals):
+    plt.gca().tick_params(axis='x', which='both', labelbottom=False)
+    new_tick_vals = [x - 0.5 for x in tick_vals][1:]
+    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
+    ylim = plt.gca().get_ylim()
+    for position, label in zip(new_tick_vals, new_tick_labels):
+        plt.text(position,
+                 ylim[0] - 0.05 * (ylim[1] - ylim[0]),
+                 label, rotation=0, ha='center', va='top')
+
+def label_ranks_y(tick_vals):
+    plt.gca().tick_params(axis='y', which='both', left=False, right=False, labelleft=False)
+    new_tick_vals = [y - 0.5 for y in tick_vals][1:]
+    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
+    xlim = plt.gca().get_xlim()
+    for position, label in zip(new_tick_vals, new_tick_labels):
+        plt.text(xlim[0] - 0.05 * (xlim[1] - xlim[0]),
+                 position,
+                 label, rotation=0, ha='center', va='top')
+
+def plot_rank_line(dates, ranks, handle):
+    groups = []
+    for (d, r) in zip(dates, ranks):
+        if len(groups) == 0:
+            groups = [[(d, r)]]
+            continue
+        delta = d - groups[-1][-1][0]
+        if delta > 2 or (delta == 2 and d % 4 != 0):
+            groups.append([(d, r)])
+        else:
+            groups[-1].append((d,r))
+    line, = plt.plot([d for (d,r) in groups[0]], [r for (d,r) in groups[0]])
+    color = line.get_color()
+    for n in range(1, len(groups)):
+        plt.plot([groups[n-1][-1][0], groups[n][0][0]],
+                 [groups[n-1][-1][1], groups[n][0][1]],
+                 color=color, linestyle=':')
+        if n == len(groups) - 1:
+            plt.plot([d for (d,r) in groups[n]],
+                     [r for (d,r) in groups[n]],
+                     color=color,
+                     label=handle)
+        else:
+            plt.plot([d for (d,r) in groups[n]],
+                     [r for (d,r) in groups[n]],
+                     color=color)
+    return color
+
 def do_draw_graphs():
     plot_dir = "plots"
     if not os.path.exists(plot_dir):
@@ -919,7 +973,6 @@ def do_draw_graphs():
         dates = [r.date for r in history]
         all_dates = list(set(all_dates + dates))
         ratings = [r.rating for r in history]
-        # with plt.rc_context({'axes.autolimit_mode': 'round_numbers'}):
 
         ranks = [rating_to_rank(r) for r in ratings]
         plotted_ranks = ranks
@@ -931,8 +984,7 @@ def do_draw_graphs():
                                  plot_low_ranks,
                                  plot_high_ranks,
                                  alpha=0.2)
-            line, = plt.plot(dates, ranks, label=handle)
-            handle_colors[handle] = line.get_color()
+            handle_colors[handle] = plot_rank_line(dates, ranks, handle)
         elif len(dates) == 1:
             # Special hacky code for when we have only one date, so we don't
             # draw an invisibly thin rectangle.
@@ -989,21 +1041,11 @@ def do_draw_graphs():
     y_max = int(max(all_plotted_ranks) + 1)
     plt.ylim(y_min, y_max)
 
-    # (tick_vals, tick_labels) = plt.yticks()
     new_tick_vals = np.arange(y_min, y_max + 1, 1.0)
     new_tick_labels = [rank_to_rank_str(r, True) for r in new_tick_vals]
-    plt.yticks(new_tick_vals, new_tick_labels)
     plt.xticks(all_dates, date_str_ticks(all_dates))
-
-    # Remove old labels and redraw new ones between ticks
-    plt.gca().tick_params(axis='y', which='both', left=False, right=False, labelleft=False)
-    new_tick_vals = [y - 0.5 for y in new_tick_vals][1:]
-    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
-    xlim = plt.gca().get_xlim()
-    for position, label in zip(new_tick_vals, new_tick_labels):
-        plt.text(xlim[0] - 0.05 * (xlim[1] - xlim[0]),
-                 position,
-                 label, rotation=0, ha='center', va='top')
+    plt.yticks(new_tick_vals)
+    label_ranks_y(new_tick_vals)
 
     plt.xlabel("Season")
     plt.ylabel("Rank")
@@ -1014,13 +1056,43 @@ def do_draw_graphs():
 def do_list_games():
     p = the_player_db.get_player_by_handle(args.list_games)
     for g in p.games:
-        if g.winner.root or g.loser.root: continue
+        # if g.winner.root or g.loser.root: continue
         w_rating = rating_to_rank_str(g.winner.get_rating_fast(g.date))
         l_rating = rating_to_rank_str(g.loser.get_rating_fast(g.date))
+        prob = predict_game(g)
         if g.winner == p:
-            print(f"{g.date:3}: {w_rating} W   {g.loser.handle:10} ({l_rating})")
+            print(f"{g.date:3}: {w_rating} W   {g.loser.handle:10} ({l_rating})          {100*prob:.1f}%")
         else:
-            print(f"{g.date:3}: {l_rating}   l {g.winner.handle:10} ({w_rating})")
+            print(f"{g.date:3}: {l_rating}   l {g.winner.handle:10}         ({w_rating})         {100-100*prob:.1f}%")
+
+def do_prob_report():
+    probs = []
+    for p in the_player_db.values():
+        for g in p.games:
+            if g.winner == p and not g.loser.root:
+                probs.append(predict_game(g))
+    probs.sort()
+    BINS = 20
+    xs = []
+    ys = []
+    for n in range(BINS):
+        min_prob = n / BINS
+        max_prob = (n+1) / BINS
+        rights = [ p for p in probs if min_prob <= p and p < max_prob ]
+        wrongs = [ p for p in probs if min_prob <= 1-p and 1-p < max_prob ]
+        if len(rights) + len(wrongs) == 0:
+            sucess = 0.5
+        else:
+            success = len(rights) / (len(rights) + len (wrongs))
+        xs.append((n+0.5) / BINS)
+        ys.append(success)
+    plt.figure(figsize=(8,8))
+    plt.title("\nWin probability\n")
+    plt.plot(xs, ys, 'o')
+    plt.plot([0, 1], [0, 1], linewidth=0.5)
+    plt.xlabel("Predicted")
+    plt.ylabel("Observed")
+    plt.show()
 
 def do_whr_vs_yd():
     players = [p for p in the_player_db.values() if p.include_in_graph()]
@@ -1038,18 +1110,7 @@ def do_whr_vs_yd():
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=1))
     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=100))
     tick_vals = ax.get_xticks()
-    tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
-    ax.set_xticks(tick_vals)
-    ax.set_xticklabels(tick_labels)
-
-    plt.gca().tick_params(axis='x', which='both', labelbottom=False)
-    new_tick_vals = [x - 0.5 for x in tick_vals][1:]
-    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
-    ylim = plt.gca().get_ylim()
-    for position, label in zip(new_tick_vals, new_tick_labels):
-        plt.text(position,
-                 ylim[0] - 0.05 * (ylim[1] - ylim[0]),
-                 label, rotation=0, ha='center', va='top')
+    label_ranks_x(tick_vals)
 
     callout = None
     if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_latest_yd_rating()])
@@ -1092,7 +1153,7 @@ def do_predict():
     p1 = the_player_db.get_player_by_handle(p1_handle)
     p2 = the_player_db.get_player_by_handle(p2_handle)
     (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(p1, p2)
-    print(f"\nThe probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
+    print(f"The probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
 
 def do_report():
     # TODO: combine with whr_vs_yd
@@ -1120,18 +1181,7 @@ def do_report():
 
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(base=1))
     tick_vals = ax.get_xticks()
-    tick_labels = [rank_to_rank_str(r, True) for r in tick_vals]
-    ax.set_xticks(tick_vals)
-    ax.set_xticklabels(tick_labels)
-
-    plt.gca().tick_params(axis='x', which='both', labelbottom=False)
-    new_tick_vals = [x - 0.5 for x in tick_vals][1:]
-    new_tick_labels = [rank_to_rank_str_tick(r-1) for r in new_tick_vals]
-    ylim = plt.gca().get_ylim()
-    for position, label in zip(new_tick_vals, new_tick_labels):
-        plt.text(position,
-                 ylim[0] - 0.05 * (ylim[1] - ylim[0]),
-                 label, rotation=0, ha='center', va='top')
+    label_ranks_x(tick_vals)
 
     plt.show()
 
@@ -1256,7 +1306,6 @@ def run() -> None:
         print("Printing report...", end="", flush=True)
         print_report(the_player_db, report_file)
 
-    # plt.style.use("seaborn-darkgrid")
     sns.set_theme()
 
     if args.draw_graph or args.draw_graphs:
@@ -1273,5 +1322,7 @@ def run() -> None:
         do_changes()
     if args.xtable:
         do_xtable()
+    if args.prob_report:
+        do_prob_report()
 
 run()

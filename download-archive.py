@@ -55,8 +55,11 @@ with urllib.request.urlopen(archive_url) as response:
                     if cur_season in seasons:
                         cycle_urls.append(CycleUrl(cur_season * 4 + cur_cycle, href, id))
 
+print(f"Downloading {args.league} files...", end="", flush=True)
 for cycle_url in cycle_urls:
+    print(f"{cycle_url.date}...", end="", flush=True)
     out_fn = "{}/{:03d}-{}-overview.html".format(dir, cycle_url.date, cycle_url.id)
     in_fn = "https://{}.yunguseng.com{}".format(args.league, cycle_url.url)
-    print("Downloading {} to {}".format(in_fn, out_fn))
+    # print("Downloading {} to {}".format(in_fn, out_fn))
     urllib.request.urlretrieve(in_fn, out_fn)
+print("Done.")
