@@ -19,6 +19,8 @@ from typing import Dict, List, Mapping, Optional
 # + Suppress wild swings while running algorithm so we can move the root games way back
 # + In graphs, draw dotted lines or something during inactivity
 # + Check historical prediction accuracy
+# + After loading ratings, set new unpopulated ratings to a good default (most recent)
+# + Refactor predict / predict_game
 # - Give rank (not rating) credit for games played, somehow
 # - Why do I need RATING_FACTOR at all?
 # - Don't draw ranks outside graph
@@ -29,10 +31,38 @@ from typing import Dict, List, Mapping, Optional
 # - Graph one or more players vs iterations as algorithm runs
 # - Graph all players fitting some criterion (e.g., group)
 # - Anchor players? (e.g., RMeigs)
-# - After loading ratings, set new unpopulated ratings to a good default (most recent)
 # - Get historical YD ratings again
 #   (The problem is that you can only get historical ratings through the player page)
 # - Smarter choice of what player to update
+
+# Ideas for giving credit to playing longer:
+#
+# When converting to human ratings, we first give some bonus points to the entire league.
+#
+# We first calculate B, the total number of games played up to this
+# point by everyone currently active.
+#
+# All players' human ratings are then boosted by an amount proportional to B/N, where
+# N is the current number of players.
+#
+# We don't want to give the bonus to individual players who have played a lot, because
+# everyone's ratings relative to each other should be correct by virtue of WHR. We're just
+# trying to lift all boats appropriately.
+#
+# Issues:
+#
+#  - Take the extreme case of everyone playing for 100 games, then everybody except one
+#    person drops out and is replaced. The remaining player's human rating shouldn't drop
+#    as a result! (UNLESS it was naturally going to go up because of the new players?
+#    that seems unlikely.)
+#
+# Can we do something so that B never decreases? Is that justified?
+#
+# I guess, if everyone but me drops out, if I have really improved, then I should perform
+# better against all the newbies (who for the sake of argument are at the same average
+# BEGINNING level as everyone who dropped out) than I would have 100 games ago. So maybe
+# it really was naturally going to go up.
+
 
 ROOT_PLAYER_ID = -1
 
@@ -244,6 +274,16 @@ class Player:
                 return
 
         self.rating_history.append(RatingDatum(date, rating, std))
+
+    def warm_start_new_ratings(self):
+        # Update unpopulated new ratings to the latest one instead of 0
+        latest_real_rating = 0
+        for r in self.rating_history:
+            if r.std == 0:
+                r.rating = latest_real_rating
+                self.rating_hash[r.date] = r
+            else:
+                latest_real_rating = r.rating
 
     def hash_ratings(self):
         for r in self.rating_history:
@@ -687,34 +727,32 @@ def run_whr(player_db: PlayerDB):
     for p in player_db.values():
         p.compute_stds()
 
-def predict(p1: Player, p2: Player):
-    mu_diff = (p1.latest_rating() - p2.latest_rating()) * RATING_FACTOR
-    var = p1.latest_std() ** 2 + p2.latest_std() ** 2
+def predict_prob(r1: float, s1: float, r2: float, s2: float):
+    # Inputs: rating and std. dev. of each player
+    mu_diff = (r1 - r2) * RATING_FACTOR
+    var = s1 ** 2 + s2 ** 2
     if var == 0:
-        print( f"{p1.handle} and {p2.handle} have no variance!" )
+        print(f"No variance!")
         var = 2
-    prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
-    p1_rank_str = rating_to_rank_str(p1.latest_rating())
-    p1_std = p1.latest_std() * RATING_SCALE
-    p2_rank_str = rating_to_rank_str(p2.latest_rating())
-    p2_std = p2.latest_std() * RATING_SCALE
+    return integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
+
+def predict(p1: Player, p2: Player):
+    r1 = p1.latest_rating()
+    s1 = p1.latest_std()
+    r2 = p2.latest_rating()
+    s2 = p2.latest_std()
+    prob = predict_prob(r1, s1, r2, s2)
+    p1_rank_str = rating_to_rank_str(r1)
+    p1_std = s1 * RATING_SCALE
+    p2_rank_str = rating_to_rank_str(r2)
+    p2_std = s2 * RATING_SCALE
     return (p1_rank_str, p1_std, p2_rank_str, p2_std, prob)
 
 def predict_game(g: Game):
+    d = g.date
     w = g.winner
     l = g.loser
-    d = g.date
-    rw = w.get_rating_fast(d)
-    rl = l.get_rating_fast(d)
-    sw = w.get_std(d)
-    sl = l.get_std(d)
-    mu_diff = (rw - rl) * RATING_FACTOR
-    var = sw ** 2 + sl ** 2
-    if var == 0:
-        print( f"{w.handle} and {l.handle} have no variance at {d}!" )
-        var = 2
-    prob = integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
-    return prob
+    return predict_prob(w.get_rating_fast(d), w.get_std(d), l.get_rating_fast(d), l.get_std(d))
 
 def print_report(player_db: PlayerDB, fname: str):
     with open(fname, "w", encoding="utf-8") as f:
@@ -777,6 +815,8 @@ def load_ratings(player_db: PlayerDB):
     for player in old_player_db.values():
         player.hash_ratings()
     player_db.copy_rating_history_from(old_player_db)
+    for player in player_db.values():
+        player.warm_start_new_ratings()
     db_con.commit()
     cur.close()
 
