@@ -1,5 +1,5 @@
 from collections import namedtuple
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, List, Mapping, Optional, Set
 
 # TODO
 # + Predict result of game
@@ -21,7 +21,8 @@ from typing import Dict, List, Mapping, Optional
 # + Check historical prediction accuracy
 # + After loading ratings, set new unpopulated ratings to a good default (most recent)
 # + Refactor predict / predict_game
-# - Give rank (not rating) credit for games played, somehow
+# + Give rank (not rating) credit for games played, somehow
+#   + Smooth the_games_played_by
 # - Why do I need RATING_FACTOR at all?
 # - Don't draw ranks outside graph
 # - Remove obsolete command-line options
@@ -62,7 +63,12 @@ from typing import Dict, List, Mapping, Optional
 # better against all the newbies (who for the sake of argument are at the same average
 # BEGINNING level as everyone who dropped out) than I would have 100 games ago. So maybe
 # it really was naturally going to go up.
-
+#
+# How to calculate it:
+#
+# For every player, calculate games played up until date d for every d
+# While we're doing that, populate a hash of players who have played at all on every d
+# Then for every date d we just sum up the p.games_played_as_of(d) for every p in played_at_all[d]
 
 ROOT_PLAYER_ID = -1
 
@@ -120,25 +126,82 @@ parser.add_argument("--list-games", type=str, default=None, metavar="H",
                     help="List the games of a player")
 parser.add_argument("--prob-report", action="store_true", default=False,
                     help="Report on games' win probabilities")
+parser.add_argument("--count-games-by", action="store_true", default=False,
+                    help="Plot how many games have been played by current players over time")
 
 args = parser.parse_args()
 if len(args.leagues) == 0:
     args.leagues = args.league
 
-# I need to multiply rating differences by this much for predictions to be most accurate
+# I need to multiply rating differences by this much for predictions
+# to be most accurate
 RATING_FACTOR = 1.3
-# RATING_FACTOR = 1.0
 
-# For converting to AGA-ish ratings
-RATING_SCALE = 1.4
-RATING_SHIFT = -0.2
+# If True, then after WHR has been performed, we calculate a 'average
+# league strength' and use that to inflate everyone's user-friendly
+# ranks accordingly.
+#
+# Average league strength at any given time is the average of the
+# bonus points earned by all active players (at that time) up to that
+# time.  One bonus point is earned per game played. Once we compute
+# league strength (and it is smoothed out to avoid artifacts) it is
+# applied to ranks at the rate of GAMES_BONUS.
+#
+# Of course this league strength is completely fictional, but:
+#  - it acknowledges that players improve over time, especially in the YD environment
+#  - it corresponds roughly to YD's own bonus point system (one YD rating point is
+#    given per game played)
+#  - it creates more reasonable looking results!
+#
+# A GAMES_BONUS of 0.04 means that if everyone in the league stuck
+# around and played 25 more games (5 months, or 6.7 in calendar time
+# including breaks), they'd all gain one rank on average. That seems
+# pretty liberal, but it resulted in the best-looking graphs in
+# practice.
 
-def rating_to_rank(raw_r):
+BONUS_RANK = True
+
+if BONUS_RANK:
+    RATING_SCALE = 1.4
+    RATING_SHIFT = -4.2
+    GAMES_BONUS = 0.04
+else:
+    # For converting to AGA-ish ratings
+    RATING_SCALE = 1.4
+    RATING_SHIFT = -0.2
+    GAMES_BONUS = 0
+
+the_games_played_by = {}
+
+def smooth_dict(dict_in: Dict[int, float]) -> Dict[int, float]:
+    # Smooth a collection of timed values with a Gaussian filter.
+    # Accounts for gaps in data.
+    filter = { -3: 0.070,
+               -2: 0.131,
+               -1: 0.191,
+               0: 0.216,
+               1: 0.191,
+               2: 0.131,
+               3: 0.070 }
+    dict_out = {}
+    for k in dict_in.keys():
+        num = 0
+        denom = 0
+        for dt in filter.keys():
+            t = k + dt
+            if t in dict_in:
+                num += dict_in[t] * filter[dt]
+                denom += filter[dt]
+        dict_out[k] = num / denom
+    return dict_out
+
+def rating_to_rank(raw_r, d):
     """Convert a raw (internal) rating to something more AGA-like."""
     # To convert to AGA ratings it seems that we should divide raw_r
     # by 1.6, but to get ratings to match up at all at both the top
     # and bottom of the population I need to multiply instead.
-    return raw_r * RATING_SCALE + RATING_SHIFT
+    bonus = the_games_played_by[d] * GAMES_BONUS if d in the_games_played_by else 0
+    return raw_r * RATING_SCALE + RATING_SHIFT + bonus
 
 def rank_to_rank_str(rank, integral=False):
     """Return the string representation of a rank. If `integral` is true and the
@@ -169,9 +232,9 @@ def rank_to_rank_str_tick(rank):
     # print(f"{rank} -> {ans}")
     return ans
 
-def rating_to_rank_str(raw_r):
+def rating_to_rank_str(raw_r, d):
     """Return the string representation of a raw rating."""
-    return rank_to_rank_str(rating_to_rank(raw_r))
+    return rank_to_rank_str(rating_to_rank(raw_r, d))
 
 def r_to_gamma(r):
     """Convert r (Elo-like rating) to gamma (Bradley-Terry-like rating)."""
@@ -218,7 +281,7 @@ class Result:
         self.date: int = date        # date of game
         self.handle: str = handle    # handle of opponent
         self.rating: float = rating    # rating of opponent at that time
-        self.rank: float = rating_to_rank(rating)
+        self.rank: float = rating_to_rank(rating, date)
         self.sep_rank: float = self.rank # rank that may have been moved a bit to avoid overlap
         self.won: bool = won          # whether we beat them
 
@@ -272,7 +335,6 @@ class Player:
                 r.gamma = r_to_gamma(rating)
                 r.std = std
                 return
-
         self.rating_history.append(RatingDatum(date, rating, std))
 
     def warm_start_new_ratings(self):
@@ -303,6 +365,29 @@ class Player:
     def remove_recent_games(self, start_date: int):
         self.games = [g for g in self.games if g.date < start_date]
 
+    def count_games_played(self, played_on: Dict[int, Set["Player"]]):
+        self.games_up_to = {}
+        d = -100
+        games_this_date = 0
+        total_games = 0
+        for g in self.games:
+            if g.winner.root or g.loser.root: continue
+            if g.date not in played_on:
+                played_on[g.date] = set()
+            played_on[g.date].add(self)
+            if g.date == d:
+                games_this_date += 1
+            else:
+                if games_this_date > 0:
+                    total_games += games_this_date
+                    self.games_up_to[d] = total_games
+                games_this_date = 1
+                d = g.date
+        if games_this_date > 0:
+            total_games += games_this_date
+            self.games_up_to[d] = total_games
+            games_this_date = 0
+
     def latest_rating(self) -> float:
         # There may be elements of the rating history that don't have any games yet,
         # so we have to skip over them.
@@ -310,6 +395,9 @@ class Player:
             if r.num_games() > 0 and r.std != 0:
                 return r.rating
         return 0
+
+    def latest_date(self) -> int:
+        return self.rating_history[-1].date
 
     def latest_std(self) -> float:
         for r in reversed(self.rating_history):
@@ -561,6 +649,18 @@ class PlayerDB:
     def values(self) -> List[Player]:
         return list(self.player_map.values())
 
+    def count_games_played(self):
+        played_on = {}
+        played_by = {}
+        for p in self.player_map.values():
+            p.count_games_played(played_on)
+        for d in played_on.keys():
+            num_games_played_by = 0
+            for p in played_on[d]:
+                num_games_played_by += p.games_up_to[d]
+            played_by[d] = num_games_played_by / len(played_on[d])
+        return played_by
+
 the_player_db = PlayerDB()
 
 def is_cycle_name(tag):
@@ -736,15 +836,16 @@ def predict_prob(r1: float, s1: float, r2: float, s2: float):
         var = 2
     return integrate.quad(lambda d: 1. / (1 + np.exp(-d)) * np.exp(-(d - mu_diff)**2 / (2 * var)), -100, 100)[0] * (1. / math.sqrt(2 * math.pi * var))
 
-def predict(p1: Player, p2: Player):
+def predict(p1: Player, p2: Player, date: int):
     r1 = p1.latest_rating()
     s1 = p1.latest_std()
     r2 = p2.latest_rating()
     s2 = p2.latest_std()
+    d = max(p1.latest_date(), p2.latest_date())
     prob = predict_prob(r1, s1, r2, s2)
-    p1_rank_str = rating_to_rank_str(r1)
+    p1_rank_str = rating_to_rank_str(r1, d)
     p1_std = s1 * RATING_SCALE
-    p2_rank_str = rating_to_rank_str(r2)
+    p2_rank_str = rating_to_rank_str(r2, d)
     p2_std = s2 * RATING_SCALE
     return (p1_rank_str, p1_std, p2_rank_str, p2_std, prob)
 
@@ -759,7 +860,7 @@ def print_report(player_db: PlayerDB, fname: str):
         for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
             if len(p.rating_history) > 0:
                 print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
-                                                         rating_to_rank_str(p.latest_rating()),
+                                                         rating_to_rank_str(p.latest_rating(), p.latest_date()),
                                                          p.latest_std() * RATING_SCALE,
                                                          p.rating_history[1:]),
                       file=f)
@@ -859,7 +960,7 @@ NewGameStats = namedtuple("NewGameStats", ["p1", "p1_rank_str", "p1_std", "p2", 
 def compute_new_game_stats(new_games: List[Game]):
     new_game_stats = []
     for g in new_games:
-        (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(g.winner, g.loser)
+        (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(g.winner, g.loser, g.date)
         new_game_stats.append(NewGameStats(p1=g.winner, p1_rank_str=p1_rank_str, p1_std=p1_std,
                                            p2=g.loser, p2_rank_str=p2_rank_str, p2_std=p2_std,
                                            prob=prob))
@@ -929,7 +1030,7 @@ def draw_opponents(games, color, draw_names, plotted_ranks):
         handles = [w.handle for w in games]
         ratings = [w.rating for w in games]
         sep_ranks = [w.sep_rank for w in games]
-        ranks = [rating_to_rank(r) for r in ratings]
+        ranks = [rating_to_rank(r, d) for (r, d) in zip(ratings, dates)]
         plotted_ranks += ranks
         plt.scatter(dates, ranks, edgecolors=color, facecolors="none", marker="o")
         if draw_names:
@@ -1014,12 +1115,12 @@ def do_draw_graphs():
         all_dates = list(set(all_dates + dates))
         ratings = [r.rating for r in history]
 
-        ranks = [rating_to_rank(r) for r in ratings]
+        ranks = [rating_to_rank(r.rating, r.date) for r in history]
         plotted_ranks = ranks
         if len(dates) > 1:
             if args.draw_graph:
-                plot_low_ranks = [rating_to_rank(r.rating - r.std) for r in history]
-                plot_high_ranks = [rating_to_rank(r.rating + r.std) for r in history]
+                plot_low_ranks = [rating_to_rank(r.rating - r.std, r.date) for r in history]
+                plot_high_ranks = [rating_to_rank(r.rating + r.std, r.date) for r in history]
                 plt.fill_between(dates,
                                  plot_low_ranks,
                                  plot_high_ranks,
@@ -1033,8 +1134,8 @@ def do_draw_graphs():
             plot_dates = [dates[0] - radius, dates[0] + radius]
             plot_ranks = [ranks[0], ranks[0]]
             if args.draw_graph:
-                plot_low_rank = rating_to_rank(history[0].rating - history[0].std)
-                plot_high_rank = rating_to_rank(history[0].rating + history[0].std)
+                plot_low_rank = rating_to_rank(history[0].rating - history[0].std, history[0].date)
+                plot_high_rank = rating_to_rank(history[0].rating + history[0].std, history[0].date)
                 plot_low_ranks = [plot_low_rank] * 2
                 plot_high_ranks = [plot_high_rank] * 2
                 plt.fill_between(plot_dates,
@@ -1095,10 +1196,11 @@ def do_draw_graphs():
 
 def do_list_games():
     p = the_player_db.get_player_by_handle(args.list_games)
+    print(f"Games of {p.handle} ({p.player_id}):")
     for g in p.games:
         # if g.winner.root or g.loser.root: continue
-        w_rating = rating_to_rank_str(g.winner.get_rating_fast(g.date))
-        l_rating = rating_to_rank_str(g.loser.get_rating_fast(g.date))
+        w_rating = rating_to_rank_str(g.winner.get_rating_fast(g.date), g.date)
+        l_rating = rating_to_rank_str(g.loser.get_rating_fast(g.date), g.date)
         prob = predict_game(g)
         if g.winner == p:
             print(f"{g.date:3}: {w_rating} W   {g.loser.handle:10} ({l_rating})          {100*prob:.1f}%")
@@ -1134,10 +1236,17 @@ def do_prob_report():
     plt.ylabel("Observed")
     plt.show()
 
+def do_count_games_by(games_played_by):
+    dates = sorted(games_played_by.keys())
+    plt.figure(figsize=(8,8))
+    plt.title("\nAverage cumulative games played by active players\n")
+    plt.plot(dates, [games_played_by[d] for d in dates], 'o')
+    plt.show()
+
 def do_whr_vs_yd():
     players = [p for p in the_player_db.values() if p.include_in_graph()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
-    whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
+    whr_ranks = [rating_to_rank(p.latest_rating(), p.latest_date) for p in players]
     whr_stds = [RATING_SCALE * p.latest_std() for p in players]
     yd_ratings = [p.get_latest_yd_rating() for p in players]
 
@@ -1153,7 +1262,7 @@ def do_whr_vs_yd():
     label_ranks_x(tick_vals)
 
     callout = None
-    if callout: ax.scatter([rating_to_rank(callout.latest_rating())], [callout.get_latest_yd_rating()])
+    if callout: ax.scatter([rating_to_rank(callout.latest_rating(), callout.latest_date)], [callout.get_latest_yd_rating()])
 
     # ax.plot(whr_ranks,
     #          [lsq[0] * r + lsq[1] for r in whr_ranks],
@@ -1192,7 +1301,7 @@ def do_predict():
     p2_handle = args.predict[1]
     p1 = the_player_db.get_player_by_handle(p1_handle)
     p2 = the_player_db.get_player_by_handle(p2_handle)
-    (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(p1, p2)
+    (p1_rank_str, p1_std, p2_rank_str, p2_std, prob) = predict(p1, p2, max(p1.latest_date(), p2.latest_date()))
     print(f"The probability of {p1_handle} ({p1_rank_str} ± {p1_std:.2f}) beating {p2_handle} ({p2_rank_str} ± {p2_std:.2f}) is {prob*100:.3}%.")
 
 def do_report():
@@ -1200,7 +1309,7 @@ def do_report():
     players = [p for p in the_player_db.values() if p.include_in_graph(True)]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
     players.sort(key=lambda p: p.latest_rating())
-    whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
+    whr_ranks = [rating_to_rank(p.latest_rating(), p.latest_date()) for p in players]
     whr_stds = [RATING_SCALE * p.latest_std() for p in players]
 
     y_poses = range(1, len(players)+1)
@@ -1247,7 +1356,7 @@ def do_changes():
 def do_xtable():
     players = [p for p in the_player_db.values() if p.rating_history and p.rating_history[-1].date >= args.min_date]
     players.sort(key=lambda p: p.latest_rating(), reverse=True)
-    whr_ranks = [rating_to_rank(p.latest_rating()) for p in players]
+    whr_ranks = [rating_to_rank(p.latest_rating(), p.latest_date()) for p in players]
     print()
     print("                      ", end="")
     for (i, p1) in enumerate(players):
@@ -1318,6 +1427,11 @@ def run() -> None:
 
     new_game_stats = []
 
+    global the_games_played_by
+    the_games_played_by = smooth_dict(the_player_db.count_games_played())
+    # for d in sorted(the_games_played_by.keys()):
+    #     print(f"{d}: {the_games_played_by[d]:.2f}")
+
     if new_games and args.note_new_games:
         new_game_stats = compute_new_game_stats(new_games)
         num_games_str = "1 new game" if len(new_games) == 1 else f"{len(new_games)} new games"
@@ -1335,9 +1449,9 @@ def run() -> None:
     if new_games and args.note_new_games:
         print("New games:")
         for gs in new_game_stats:
-            p1_rank_str = rating_to_rank_str(gs.p1.latest_rating())
+            p1_rank_str = rating_to_rank_str(gs.p1.latest_rating(), gs.p1.latest_date())
             p1_std = gs.p1.latest_std() * RATING_SCALE
-            p2_rank_str = rating_to_rank_str(gs.p2.latest_rating())
+            p2_rank_str = rating_to_rank_str(gs.p2.latest_rating(), gs.p2.latest_date())
             p2_std = gs.p2.latest_std() * RATING_SCALE
             print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
             print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
@@ -1364,5 +1478,7 @@ def run() -> None:
         do_xtable()
     if args.prob_report:
         do_prob_report()
+    if args.count_games_by:
+        do_count_games_by(the_games_played_by)
 
 run()
