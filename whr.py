@@ -1246,7 +1246,7 @@ def do_count_games_by(games_played_by):
 def do_whr_vs_yd():
     players = [p for p in the_player_db.values() if p.include_in_graph()]
     players = [p for p in players if p.rating_history[-1].date >= args.min_date]
-    whr_ranks = [rating_to_rank(p.latest_rating(), p.latest_date) for p in players]
+    whr_ranks = [rating_to_rank(p.latest_rating(), p.latest_date()) for p in players]
     whr_stds = [RATING_SCALE * p.latest_std() for p in players]
     yd_ratings = [p.get_latest_yd_rating() for p in players]
 
@@ -1262,7 +1262,7 @@ def do_whr_vs_yd():
     label_ranks_x(tick_vals)
 
     callout = None
-    if callout: ax.scatter([rating_to_rank(callout.latest_rating(), callout.latest_date)], [callout.get_latest_yd_rating()])
+    if callout: ax.scatter([rating_to_rank(callout.latest_rating(), callout.latest_date())], [callout.get_latest_yd_rating()])
 
     # ax.plot(whr_ranks,
     #          [lsq[0] * r + lsq[1] for r in whr_ranks],
