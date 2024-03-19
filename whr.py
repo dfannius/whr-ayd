@@ -23,52 +23,20 @@ from typing import Dict, List, Mapping, Optional, Set
 # + Refactor predict / predict_game
 # + Give rank (not rating) credit for games played, somehow
 #   + Smooth the_games_played_by
+# + Remove obsolete command-line options
+#   + Is --league / --leagues still useful? (No)
+# - Command-line option to compare two players
 # - Why do I need RATING_FACTOR at all?
 # - Don't draw ranks outside graph
-# - Remove obsolete command-line options
-#   - Is --league / --leagues still useful?
 # - Make handle lookup faster? Not really necessary right now
 # - Do visual clusters in graph by season rather than date
 # - Graph one or more players vs iterations as algorithm runs
 # - Graph all players fitting some criterion (e.g., group)
 # - Anchor players? (e.g., RMeigs)
+#   This doesn't seem necessary now that I have GAMES_BONUS
 # - Get historical YD ratings again
 #   (The problem is that you can only get historical ratings through the player page)
 # - Smarter choice of what player to update
-
-# Ideas for giving credit to playing longer:
-#
-# When converting to human ratings, we first give some bonus points to the entire league.
-#
-# We first calculate B, the total number of games played up to this
-# point by everyone currently active.
-#
-# All players' human ratings are then boosted by an amount proportional to B/N, where
-# N is the current number of players.
-#
-# We don't want to give the bonus to individual players who have played a lot, because
-# everyone's ratings relative to each other should be correct by virtue of WHR. We're just
-# trying to lift all boats appropriately.
-#
-# Issues:
-#
-#  - Take the extreme case of everyone playing for 100 games, then everybody except one
-#    person drops out and is replaced. The remaining player's human rating shouldn't drop
-#    as a result! (UNLESS it was naturally going to go up because of the new players?
-#    that seems unlikely.)
-#
-# Can we do something so that B never decreases? Is that justified?
-#
-# I guess, if everyone but me drops out, if I have really improved, then I should perform
-# better against all the newbies (who for the sake of argument are at the same average
-# BEGINNING level as everyone who dropped out) than I would have 100 games ago. So maybe
-# it really was naturally going to go up.
-#
-# How to calculate it:
-#
-# For every player, calculate games played up until date d for every d
-# While we're doing that, populate a hash of players who have played at all on every d
-# Then for every date d we just sum up the p.games_played_as_of(d) for every p in played_at_all[d]
 
 ROOT_PLAYER_ID = -1
 
@@ -94,6 +62,8 @@ parser.add_argument("--parse-seasons", action="store_true", default=False,
                     help="Parse HTML season files into game data file")
 parser.add_argument("--parse-season-start", type=int, default=1, metavar="N",
                     help="Season to start parsing HTML files from")
+parser.add_argument("--parse-cycle-start", type=int, default=1, metavar="N",
+                    help="Cycle (1-3) to start parsing HTML files from")
 parser.add_argument("--analyze-games", action="store_true", default=False,
                     help="Analyze game data file")
 parser.add_argument("--print-report", action="store_true", default=False,
@@ -106,10 +76,6 @@ parser.add_argument("--graph-names", action="store_true", default=False,
                     help="Show opponent names on graph")
 parser.add_argument("--whr-vs-yd", action="store_true", default=False,
                     help="Draw scatterplot of WHR vs YD ratings")
-parser.add_argument("--league", type=str, default="ayd", metavar="S",
-                    help="League (ayd or eyd)")
-parser.add_argument("--leagues", type=str, default="", metavar="S",
-                    help="Leagues")
 parser.add_argument("--min-date", type=int, default=0, metavar="N",
                     help="Mininum active date for players in graph")
 parser.add_argument("--note-new-games", action="store_true", default=False,
@@ -130,8 +96,6 @@ parser.add_argument("--count-games-by", action="store_true", default=False,
                     help="Plot how many games have been played by current players over time")
 
 args = parser.parse_args()
-if len(args.leagues) == 0:
-    args.leagues = args.league
 
 # I need to multiply rating differences by this much for predictions
 # to be most accurate
@@ -676,8 +640,8 @@ def cycle_to_date(s: str) -> str:
     else:
         return " ".join(s.split(" ")[-2:])
 
-def flush_old_games(player_db: PlayerDB, start_season: int, old_games: List[Game]):
-    start_date = season_cycle_to_date(start_season, 0)
+def flush_old_games(player_db: PlayerDB, start_season: int, start_cycle: int, old_games: List[Game]):
+    start_date = season_cycle_to_date(start_season, start_cycle-1)
     player_db.remove_recent_games(start_date)
     games = [g for g in old_games if g.date < start_date]
     flushed_games = [g for g in old_games if g.date >= start_date]
@@ -695,9 +659,10 @@ def get_crosstable_tag(starting_at_tag):
 def parse_seasons(player_db: PlayerDB,
                   league: str,
                   start_season: int,
+                  start_cycle: int,
                   existing_games: List[Game] ,
                   flushed_games: List[Game]):
-    start_date = season_cycle_to_date(start_season, 0)
+    start_date = season_cycle_to_date(start_season, start_cycle-1)
 
     # An overview file may contain all three cycles of a season (AYD,
     # early EYD seasons) or a single cycle (late EYD seasons).
@@ -1387,10 +1352,6 @@ def do_xtable():
         print(f"  {wins_vs_stronger:2d}-{losses_vs_stronger:2d} {wins_vs_weaker:2d}-{losses_vs_weaker:2d}")
 
 def run() -> None:
-    report_file = "{}-{}".format(args.league, args.report_file)
-
-    leagues = args.leagues.split(",")
-
     # print("Loading ids...", end="", flush=True)
     load_ids(the_player_db)
 
@@ -1403,12 +1364,16 @@ def run() -> None:
 
     if args.parse_seasons:
         print("Parsing seasons...", end="", flush=True)
-        games, flushed_games = flush_old_games(the_player_db, args.parse_season_start, games)
-        for league in leagues:
+        games, flushed_games = flush_old_games(the_player_db,
+                                               args.parse_season_start,
+                                               args.parse_cycle_start,
+                                               games)
+        for league in ["ayd", "eyd"]:
             print("{}...".format(league), end="")
             these_new_games = parse_seasons(the_player_db,
                                             league,
                                             args.parse_season_start,
+                                            args.parse_cycle_start,
                                             games,
                                             flushed_games)
             new_games.extend(these_new_games)
@@ -1458,7 +1423,7 @@ def run() -> None:
 
     if args.print_report:
         print("Printing report...", end="", flush=True)
-        print_report(the_player_db, report_file)
+        print_report(the_player_db, args.report_file)
 
     sns.set_theme()
 

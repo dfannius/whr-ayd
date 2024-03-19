@@ -1,1 +1,1 @@
-python whr.py --leagues ayd,eyd --draw-graphs "$@"
+python whr.py --draw-graphs "$@"

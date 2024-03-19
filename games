@@ -1,1 +1,1 @@
-python whr.py --leagues ayd,eyd --list-games $1
+python whr.py --list-games $1

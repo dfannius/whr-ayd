@@ -11,6 +11,8 @@ parser.add_argument("--league", type=str, default="ayd", metavar="S",
                     help="League (ayd or eyd)")
 parser.add_argument("--season", type=int, default="0", metavar="N",
                     help="Single season to download")
+parser.add_argument("--cycle", type=int, default="1", metavar="N",
+                    help="First cycle (1-3) to download")
 args = parser.parse_args()
 
 dir = "{}-overviews".format(args.league)
@@ -56,10 +58,11 @@ with urllib.request.urlopen(archive_url) as response:
                         cycle_urls.append(CycleUrl(cur_season * 4 + cur_cycle, href, id))
 
 print(f"Downloading {args.league} files...", end="", flush=True)
-for cycle_url in cycle_urls:
-    print(f"{cycle_url.date}...", end="", flush=True)
-    out_fn = "{}/{:03d}-{}-overview.html".format(dir, cycle_url.date, cycle_url.id)
-    in_fn = "https://{}.yunguseng.com{}".format(args.league, cycle_url.url)
-    # print("Downloading {} to {}".format(in_fn, out_fn))
-    urllib.request.urlretrieve(in_fn, out_fn)
+for (cycle_num, cycle_url) in enumerate(cycle_urls):
+    if cycle_num >= args.cycle - 1:
+        print(f"{cycle_url.date}...", end="", flush=True)
+        out_fn = "{}/{:03d}-{}-overview.html".format(dir, cycle_url.date, cycle_url.id)
+        in_fn = "https://{}.yunguseng.com{}".format(args.league, cycle_url.url)
+        # print("Downloading {} to {}".format(in_fn, out_fn))
+        urllib.request.urlretrieve(in_fn, out_fn)
 print("Done.")
