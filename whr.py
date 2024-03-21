@@ -25,6 +25,7 @@ from typing import Dict, List, Mapping, Optional, Set
 #   + Smooth the_games_played_by
 # + Remove obsolete command-line options
 #   + Is --league / --leagues still useful? (No)
+# - Convert everything to f-strings
 # - Command-line option to compare two players
 # - Why do I need RATING_FACTOR at all?
 # - Don't draw ranks outside graph
@@ -238,7 +239,7 @@ class RatingDatum:
         return len(self.wins) + len(self.losses)
 
     def __repr__(self):
-        return "{}: {}".format(self.date, rating_to_rank_str(self.rating))
+        return "{}: {}".format(self.date, rating_to_rank_str(self.rating, self.date))
 
 class Result:
     def __init__(self, date: int, handle: str, rating: float, won: bool):
@@ -361,6 +362,8 @@ class Player:
         return 0
 
     def latest_date(self) -> int:
+        if self.root:
+            return 0
         return self.rating_history[-1].date
 
     def latest_std(self) -> float:
@@ -822,9 +825,12 @@ def predict_game(g: Game):
 
 def print_report(player_db: PlayerDB, fname: str):
     with open(fname, "w", encoding="utf-8") as f:
-        for p in sorted(player_db.values(), key=lambda p: p.latest_rating(), reverse=True):
+        players = [ p for p in player_db.values() if (not p.root) and p.latest_date() >= args.min_date ]
+        for p in sorted(players,
+                        key=lambda p: rating_to_rank(p.latest_rating(), p.latest_date()),
+                        reverse=True):
             if len(p.rating_history) > 0:
-                print("{:<10} {:>5} ± {:.2f}: {}".format(p.handle,
+                print("{:<10} {:>6} ± {:.2f}: {}".format(p.handle,
                                                          rating_to_rank_str(p.latest_rating(), p.latest_date()),
                                                          p.latest_std() * RATING_SCALE,
                                                          p.rating_history[1:]),
@@ -1418,12 +1424,13 @@ def run() -> None:
             p1_std = gs.p1.latest_std() * RATING_SCALE
             p2_rank_str = rating_to_rank_str(gs.p2.latest_rating(), gs.p2.latest_date())
             p2_std = gs.p2.latest_std() * RATING_SCALE
-            print(f"   {gs.p1.handle:10} ({gs.p1_rank_str} ± {gs.p1_std:.2f} -> {p1_rank_str} ± {p1_std:.2f}) > ", end="")
-            print(f"{gs.p2.handle:10} ({gs.p2_rank_str} ± {gs.p2_std:.2f} -> {p2_rank_str} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
+            print(f"   {gs.p1.handle:10} ({gs.p1_rank_str:>6} ± {gs.p1_std:.2f} -> {p1_rank_str:>6} ± {p1_std:.2f}) > ", end="")
+            print(f"{gs.p2.handle:10} ({gs.p2_rank_str:>6} ± {gs.p2_std:.2f} -> {p2_rank_str:>6} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
 
     if args.print_report:
         print("Printing report...", end="", flush=True)
         print_report(the_player_db, args.report_file)
+        print("Done.")
 
     sns.set_theme()
 
