@@ -25,7 +25,7 @@ from typing import Dict, List, Mapping, Optional, Set
 #   + Smooth the_games_played_by
 # + Remove obsolete command-line options
 #   + Is --league / --leagues still useful? (No)
-# - Convert everything to f-strings
+# + Convert everything to f-strings
 # - Command-line option to compare two players
 # - Why do I need RATING_FACTOR at all?
 # - Don't draw ranks outside graph
@@ -57,8 +57,6 @@ from scipy import integrate
 import seaborn as sns
 
 parser = argparse.ArgumentParser(description="WHR for AYD")
-parser.add_argument("--report-file", type=str, default="report.txt", metavar="F",
-                    help="File with ratings report")
 parser.add_argument("--parse-seasons", action="store_true", default=False,
                     help="Parse HTML season files into game data file")
 parser.add_argument("--parse-season-start", type=int, default=1, metavar="N",
@@ -217,7 +215,7 @@ def date_to_season_cycle(d):
 
 def date_to_str(d):
     season, cycle = date_to_season_cycle(d)
-    return "{}{}".format(season, "ABC"[cycle])
+    return f"{season}{'ABC'[cycle]}"
 
 def season_cycle_to_date(s, c):
     return s * 4 + c
@@ -239,7 +237,7 @@ class RatingDatum:
         return len(self.wins) + len(self.losses)
 
     def __repr__(self):
-        return "{}: {}".format(self.date, rating_to_rank_str(self.rating, self.date))
+        return f"{self.date}: {rating_to_rank_str(self.rating, self.date)}"
 
 class Result:
     def __init__(self, date: int, handle: str, rating: float, won: bool):
@@ -286,11 +284,11 @@ class Player:
         return True
 
     def write_rating_history(self, f):
-        print('"{}"'.format(self.handle), file=f, end="")
-        print(',{}'.format(self.get_latest_yd_rating()), file=f, end="")
-        print(',{}'.format(len(self.rating_history)), file=f, end="")
+        print(f'"{self.handle}"', file=f, end="")
+        print(f',{self.get_latest_yd_rating()}', file=f, end="")  
+        print(f',{len(self.rating_history)}', file=f, end="")
         for r in self.rating_history:
-            print(',{},{:.8f},{:.8f}'.format(r.date, r.rating, r.std), file=f, end="")
+           print(f',{r.date},{r.rating:.8f},{r.std:.8f}', file=f, end="")
         print(file=f)
 
     def add_rating(self, date: int, rating: float, std: float):
@@ -565,7 +563,7 @@ class Game:
                 self.loser == other.loser)
 
     def __repr__(self):
-        return "{:03}: {} > {}".format(self.date, self.winner, self.loser)
+        return f"{self.date:03}: {self.winner} > {self.loser}"
 
 class PlayerDB:
     def __init__(self) -> None:
@@ -669,7 +667,7 @@ def parse_seasons(player_db: PlayerDB,
 
     # An overview file may contain all three cycles of a season (AYD,
     # early EYD seasons) or a single cycle (late EYD seasons).
-    overview_files = glob.glob("{}-overviews/*-overview.html".format(league))
+    overview_files = glob.glob(f"{league}-overviews/*-overview.html")
     overview_file_array: List[List[str]] = []
     overview_file_re = re.compile(r"(\d+)-([^-]*)-overview.html")
     for fn in overview_files:
@@ -687,7 +685,7 @@ def parse_seasons(player_db: PlayerDB,
 
     anchor_date = start_date
     while anchor_date < len(overview_file_array):
-        print("{}...".format(anchor_date), end="", flush=True)
+        print(f"{anchor_date}...", end="", flush=True)
         for fn in overview_file_array[anchor_date]:
             with open(fn, "rb") as f:
                 soup = BeautifulSoup(f, "lxml")
@@ -785,12 +783,11 @@ def iterate_whr(player_db: PlayerDB, n: int):
 def run_whr(player_db: PlayerDB):
     for i in range(1000):
         if (i+1) % 100 == 0:
-            print("{}...".format(i+1), end="", flush=True)
-            # print("ITERATION {}".format(i))
+            print(f"{i+1}...", end="", flush=True)
+            # print(f"ITERATION {i}")
         max_change = iterate_whr(player_db, i)
         if max_change < 1e-05:
-            print("Completed WHR in {} iteration{}...".format(i+1, "s" if i > 0 else ""),
-                  end="", flush=True)
+            print(f"Completed WHR in {i+1} iteration{'s' if i > 0 else ''}...", end="", flush=True)
             break
     for p in player_db.values():
         p.compute_stds()
@@ -823,18 +820,16 @@ def predict_game(g: Game):
     l = g.loser
     return predict_prob(w.get_rating_fast(d), w.get_std(d), l.get_rating_fast(d), l.get_std(d))
 
-def print_report(player_db: PlayerDB, fname: str):
-    with open(fname, "w", encoding="utf-8") as f:
-        players = [ p for p in player_db.values() if (not p.root) and p.latest_date() >= args.min_date ]
-        for p in sorted(players,
-                        key=lambda p: rating_to_rank(p.latest_rating(), p.latest_date()),
-                        reverse=True):
-            if len(p.rating_history) > 0:
-                print("{:<10} {:>6} ± {:.2f}: {}".format(p.handle,
-                                                         rating_to_rank_str(p.latest_rating(), p.latest_date()),
-                                                         p.latest_std() * RATING_SCALE,
-                                                         p.rating_history[1:]),
-                      file=f)
+def print_report(player_db: PlayerDB):
+    players = [ p for p in player_db.values() if (not p.root) and p.latest_date() >= args.min_date ]
+    for p in sorted(players,
+                    key=lambda p: rating_to_rank(p.latest_rating(), p.latest_date()),
+                    reverse=True):
+        if len(p.rating_history) > 0:
+            print("{:<10} {:>6} ± {:.2f}: {}".format(p.handle,
+                                                     rating_to_rank_str(p.latest_rating(), p.latest_date()),
+                                                     p.latest_std() * RATING_SCALE,
+                                                     p.rating_history[1:]))
 
 def save_rating_history(player_db: PlayerDB, fname: str):
     with open(fname, "w", encoding="utf-8") as f:
@@ -1161,7 +1156,7 @@ def do_draw_graphs():
 
     plt.xlabel("Season")
     plt.ylabel("Rank")
-    plt.savefig("{}/{}.png".format(plot_dir, handle))
+    plt.savefig(f"{plot_dir}/{handle}.png")
     plt.tight_layout()
     plt.show()
 
@@ -1375,7 +1370,7 @@ def run() -> None:
                                                args.parse_cycle_start,
                                                games)
         for league in ["ayd", "eyd"]:
-            print("{}...".format(league), end="")
+            print(f"{league}...", end="")
             these_new_games = parse_seasons(the_player_db,
                                             league,
                                             args.parse_season_start,
@@ -1428,9 +1423,7 @@ def run() -> None:
             print(f"{gs.p2.handle:10} ({gs.p2_rank_str:>6} ± {gs.p2_std:.2f} -> {p2_rank_str:>6} ± {p2_std:.2f}) ({gs.prob*100:.3}% chance)")
 
     if args.print_report:
-        print("Printing report...", end="", flush=True)
-        print_report(the_player_db, args.report_file)
-        print("Done.")
+        print_report(the_player_db)
 
     sns.set_theme()
 
